@@ -2,7 +2,7 @@ import { defineConfig } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
 export default defineConfig({
-  base: '/sumana-wordchain/',
+  base: '/wordchain/',
   build: {
     outDir: 'dist',
     sourcemap: false,
@@ -18,7 +18,7 @@ export default defineConfig({
         theme_color: '#2563eb',
         background_color: '#f8f9ff',
         display: 'standalone',
-        start_url: '/sumana-wordchain/',
+        start_url: '/wordchain/',
         icons: [
           {
             src: 'favicon.svg',

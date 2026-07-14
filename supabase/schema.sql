@@ -22,6 +22,7 @@ create table if not exists groups (
   turn_seconds int not null default 60,
   current_turn_player_id uuid references profiles(id),
   current_letter char(1),
+  game_mode text not null default 'turns_timed' check (game_mode in ('turns_timed', 'turns_relaxed', 'free_for_all')),
   created_at timestamptz default now()
 );
 
@@ -145,18 +146,20 @@ begin
 
   -- Check group is active
   if v_group.status != 'active' then
-    raise exception 'Game is not active' using errcode = 'GNACT';
+    raise exception 'Game is not active';
   end if;
 
-  -- Check it's this player's turn (unless it's the first word)
-  if v_group.current_turn_player_id is not null and v_group.current_turn_player_id != new.player_id then
-    raise exception 'Not your turn' using errcode = 'NTURN';
+  -- Check it's this player's turn (unless free_for_all mode or it's the first word)
+  if v_group.game_mode != 'free_for_all' then
+    if v_group.current_turn_player_id is not null and v_group.current_turn_player_id != new.player_id then
+      raise exception 'Not your turn';
+    end if;
   end if;
 
   -- Check word starts with the required letter (unless first word)
   if v_group.current_letter is not null then
     if lower(substr(new.word, 1, 1)) != lower(v_group.current_letter) then
-      raise exception 'Word must start with %', v_group.current_letter using errcode = 'WSTART';
+      raise exception 'Word must start with %', v_group.current_letter;
     end if;
   end if;
 
@@ -171,6 +174,14 @@ begin
 
   -- Determine next letter (last letter of new word)
   v_last_letter := lower(substr(new.word, v_word_length, 1));
+
+  -- For free_for_all mode, don't advance turn — just update the letter
+  if v_group.game_mode = 'free_for_all' then
+    update groups set
+      current_letter = v_last_letter
+    where id = new.group_id;
+    return new;
+  end if;
 
   -- Find next player in turn order
   select gm.player_id into v_next_player_id

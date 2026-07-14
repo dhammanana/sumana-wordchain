@@ -59,10 +59,25 @@ export default async function LobbyView(container, params) {
           </div>
         </div>
 
+        <!-- Study Mode Info -->
+        <div class="bg-surface-container-lowest border border-outline-variant rounded-2xl p-gap-lg">
+          <h3 class="font-headline-sm text-headline-sm flex items-center gap-2 mb-gap-md">
+            <span class="material-symbols-outlined text-primary" style="font-variation-settings:'FILL'1">auto_stories</span>
+            Study Mode
+          </h3>
+          <div id="mode-info" class="flex items-center gap-gap-md p-gap-md bg-surface-container rounded-xl">
+            <span id="mode-icon" class="material-symbols-outlined text-primary text-2xl">timer</span>
+            <div>
+              <p id="mode-name" class="font-headline-sm text-headline-sm">Guided Turns</p>
+              <p id="mode-description" class="font-label-caps text-label-caps text-outline">Take turns with a gentle timer.</p>
+            </div>
+          </div>
+        </div>
+
         <!-- Game Settings (Host only) -->
         <div id="host-controls" class="hidden bg-surface-container-lowest border border-outline-variant rounded-2xl p-gap-lg">
-          <h3 class="font-headline-sm text-headline-sm mb-gap-md">Game Settings</h3>
-          <div class="flex items-center justify-between mb-gap-md">
+          <h3 class="font-headline-sm text-headline-sm mb-gap-md">Session Settings</h3>
+          <div id="timer-settings" class="flex items-center justify-between mb-gap-md">
             <label class="font-body-md text-body-md">Turn Timer</label>
             <div class="flex gap-1">
               <button class="timer-option px-3 py-1.5 rounded-lg font-label-caps text-label-caps bg-surface-container-highest text-on-surface-variant" data-seconds="30">30s</button>
@@ -72,7 +87,7 @@ export default async function LobbyView(container, params) {
           </div>
           <button id="start-game-btn" class="w-full py-4 bg-secondary text-on-secondary font-headline-sm text-headline-sm rounded-xl btn-tactile transition-all flex items-center justify-center gap-md">
             <span class="material-symbols-outlined" style="font-variation-settings:'FILL'1">play_arrow</span>
-            Start Game
+            Begin Study Session
           </button>
         </div>
 
@@ -273,27 +288,63 @@ export default async function LobbyView(container, params) {
   }
 
   function renderGroupInfo(group) {
-    container.querySelector('#lobby-group-name').textContent = group.name || 'Game Lobby';
+    container.querySelector('#lobby-group-name').textContent = group.name || 'Study Room';
     container.querySelector('#lobby-group-code').textContent = group.code;
-    container.querySelector('#player-count').textContent = `${group.members?.length || 0} players`;
+    container.querySelector('#player-count').textContent = `${group.members?.length || 0} student${group.members?.length !== 1 ? 's' : ''}`;
+
+    // Update mode info
+    const modeInfo = {
+      turns_timed: { name: 'Guided Turns', desc: 'Take turns with a gentle timer.', icon: 'timer' },
+      turns_relaxed: { name: 'Relaxed Turns', desc: 'Turn-based with no time pressure. Study at your own pace.', icon: 'self_improvement' },
+      free_for_all: { name: 'Open Practice', desc: 'Anyone can add words anytime. Perfect for shared learning.', icon: 'diversity_3' },
+    };
+    const mode = modeInfo[group.game_mode] || modeInfo.turns_timed;
+    const modeIcon = container.querySelector('#mode-icon');
+    const modeName = container.querySelector('#mode-name');
+    const modeDesc = container.querySelector('#mode-description');
+    if (modeIcon) modeIcon.textContent = mode.icon;
+    if (modeName) modeName.textContent = mode.name;
+    if (modeDesc) modeDesc.textContent = mode.desc;
+
+    // Show/hide timer settings based on mode
+    const timerSettings = container.querySelector('#timer-settings');
+    if (timerSettings) {
+      if (group.game_mode === 'turns_timed') {
+        timerSettings.classList.remove('hidden');
+      } else {
+        timerSettings.classList.add('hidden');
+      }
+    }
 
     const memberList = container.querySelector('#member-list');
     if (group.members && group.members.length > 0) {
+      // Colors for avatar initials (deterministic based on player_id)
+      const avatarColors = ['bg-primary text-on-primary', 'bg-secondary text-on-secondary', 'bg-tertiary text-on-tertiary', 'bg-error text-on-error'];
+      function getAvatarColor(id) {
+        let hash = 0;
+        for (let i = 0; i < (id || '').length; i++) {
+          const char = (id || '').charCodeAt(i);
+          hash = ((hash << 5) - hash) + char;
+          hash |= 0;
+        }
+        return avatarColors[Math.abs(hash) % avatarColors.length];
+      }
+
       memberList.innerHTML = group.members.map((m, i) => {
         const profile = m.profiles || {};
         const isHostPlayer = m.player_id === group.host_id;
-        const avatarUrl = `https://api.dicebear.com/8.x/adventurer/svg?seed=${profile.avatar_seed || m.player_id}`;
+        const displayName = profile.display_name || 'Student ' + (i + 1);
 
         return `
           <div class="flex items-center justify-between p-gap-md bg-surface-container rounded-xl hover:bg-surface-container-high transition-all">
             <div class="flex items-center gap-gap-md">
               <div class="relative">
-                <img src="${avatarUrl}" alt="" class="w-10 h-10 rounded-full bg-surface-container-highest" />
+                <div class="w-10 h-10 rounded-full ${getAvatarColor(m.player_id)} flex items-center justify-center font-bold text-sm">${displayName.slice(0, 2).toUpperCase()}</div>
                 ${isHostPlayer ? '<span class="absolute -top-1 -right-1 text-xs">👑</span>' : ''}
               </div>
               <div>
-                <p class="font-headline-sm text-headline-sm">${profile.display_name || 'Player ' + (i + 1)}</p>
-                <p class="font-label-caps text-label-caps text-outline">${isHostPlayer ? 'Host' : 'Player'}</p>
+                <p class="font-headline-sm text-headline-sm">${displayName}</p>
+                <p class="font-label-caps text-label-caps text-outline">${isHostPlayer ? 'Host' : 'Student'}</p>
               </div>
             </div>
             <span class="w-2 h-2 rounded-full bg-secondary" title="Online"></span>

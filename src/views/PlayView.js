@@ -1,13 +1,18 @@
 /**
- * PlayView - The main game arena for WordChain
+ * PlayView - The main study arena for WordChain
  *
  * Features:
- * - Real-time multiplayer word chain
- * - Turn timer with countdown
+ * - Real-time multiplayer word chain study
+ * - Three modes: Guided Turns (timed), Relaxed Turns (untimed), Open Practice (anyone anytime)
+ * - Turn timer with countdown (turns_timed only)
  * - Word submission with validation
  * - Chain visualization
- * - Score tracking
- * - Solo mode vs bot opponent
+ * - Progress tracking
+ * - Solo study with bot opponent
+ *
+ * Design note: This app is for monks and Buddhist practitioners.
+ * Terminology uses "study", "practice", "learn" rather than "game".
+ * UI is calm and mindful, designed for collaborative vocabulary learning.
  */
 import store from '../store.js';
 import { navigate } from '../router.js';
@@ -20,6 +25,13 @@ import { showToast, formatTimeAgo } from '../utils/ui.js';
 let turnTimer = null;
 let secondsLeft = 60;
 
+// Descriptive labels for each study mode
+const MODE_LABELS = {
+  turns_timed: { label: 'Guided Turns', icon: 'timer', desc: 'Take turns with a gentle timer.' },
+  turns_relaxed: { label: 'Relaxed Turns', icon: 'self_improvement', desc: 'No time pressure — study at your own pace.' },
+  free_for_all: { label: 'Open Practice', icon: 'diversity_3', desc: 'Anyone can add words anytime.' },
+};
+
 export default async function PlayView(container, params) {
   const gameId = params.id;
   const isSolo = gameId === 'solo';
@@ -30,18 +42,20 @@ export default async function PlayView(container, params) {
       <!-- Loading State -->
       <div id="play-loading" class="flex flex-col items-center justify-center py-20 w-full">
         <div class="w-10 h-10 border-4 border-primary border-t-transparent rounded-full animate-spin mb-4"></div>
-        <p class="font-body-md text-body-md text-on-surface-variant">Preparing game arena...</p>
+        <p class="font-body-md text-body-md text-on-surface-variant">Preparing study session...</p>
       </div>
 
-      <!-- Game Content (hidden until loaded) -->
+      <!-- Study Content (hidden until loaded) -->
       <div id="play-content" class="hidden w-full space-y-gap-lg animate-slide-up">
-        <!-- Game Header -->
+        <!-- Study Header -->
         <div class="flex items-center justify-between">
           <div>
-            <h2 class="font-headline-md text-headline-md" id="game-title">Game Arena</h2>
+            <h2 class="font-headline-md text-headline-md" id="game-title">Study Session</h2>
             <p class="font-body-md text-body-md text-on-surface-variant" id="game-subtitle"></p>
           </div>
           <div class="flex items-center gap-3">
+            <!-- Mode Badge -->
+            <span id="mode-badge" class="px-3 py-1 bg-surface-container-high text-outline font-label-caps text-label-caps rounded-full hidden"></span>
             <button id="dictionary-btn" class="px-gap-md py-gap-sm bg-surface-container-high text-primary rounded-xl font-label-caps text-label-caps hover:bg-primary-container/20 transition-all flex items-center gap-1" title="Look up a word">
               <span class="material-symbols-outlined text-sm">menu_book</span>
               Dictionary
@@ -49,7 +63,7 @@ export default async function PlayView(container, params) {
           </div>
         </div>
 
-        <!-- Timer Bar -->
+        <!-- Timer Bar (only visible for turns_timed mode) -->
         <div id="timer-container" class="hidden bg-surface-container-high rounded-2xl p-gap-md overflow-hidden">
           <div class="flex items-center justify-between mb-2">
             <span class="font-label-caps text-label-caps text-outline uppercase">Your Turn</span>
@@ -60,21 +74,21 @@ export default async function PlayView(container, params) {
           </div>
         </div>
 
-        <!-- Turn Indicator -->
+        <!-- Turn Indicator - hidden for free_for_all mode -->
         <div id="turn-indicator" class="flex items-center gap-gap-md p-gap-md bg-surface-container-lowest border border-outline-variant rounded-xl">
-          <div class="w-3 h-3 rounded-full bg-secondary animate-pulse"></div>
+          <div id="turn-dot" class="w-3 h-3 rounded-full bg-secondary animate-pulse"></div>
           <div>
-            <p id="turn-text" class="font-body-md text-body-md">Waiting for game to start...</p>
+            <p id="turn-text" class="font-body-md text-body-md">Waiting for session to start...</p>
             <p id="required-letter-display" class="font-label-caps text-label-caps text-outline hidden">Next word must start with: <span id="required-letter" class="font-bold text-primary text-lg"></span></p>
           </div>
         </div>
 
-        <!-- Scoreboard -->
+        <!-- Progress Board -->
         <div class="bg-surface-container-lowest border border-outline-variant rounded-2xl overflow-hidden">
           <div class="px-gap-lg py-gap-md bg-primary-container/10">
             <h3 class="font-headline-sm text-headline-sm flex items-center gap-2">
               <span class="material-symbols-outlined text-primary" style="font-variation-settings:'FILL'1">leaderboard</span>
-              Scoreboard
+              Progress Board
             </h3>
           </div>
           <div id="scoreboard" class="p-gap-lg space-y-gap-sm">
@@ -82,7 +96,7 @@ export default async function PlayView(container, params) {
           </div>
         </div>
 
-        <!-- Word Input & Submit -->
+        <!-- Word Input & Submit - always visible for free_for_all; shown/hidden for turn modes -->
         <div id="word-input-area" class="hidden bg-surface-container-lowest border border-outline-variant rounded-2xl p-gap-lg">
           <label class="font-label-caps text-label-caps text-outline mb-2 block" for="word-input">YOUR WORD</label>
           <div class="flex flex-col sm:flex-row gap-gap-md">
@@ -112,7 +126,7 @@ export default async function PlayView(container, params) {
           <div id="chain-container" class="max-h-[400px] overflow-y-auto word-chain-scroll">
             <div id="chain-empty" class="text-center py-8">
               <span class="material-symbols-outlined text-4xl text-outline mb-2">empty_dashboard</span>
-              <p class="font-body-md text-body-md text-on-surface-variant">No words played yet. Be the first!</p>
+              <p class="font-body-md text-body-md text-on-surface-variant">No words yet. Be the first to contribute!</p>
             </div>
             <div id="chain-list" class="space-y-gap-sm hidden">
               <!-- Chain items rendered here in reverse order (newest first) -->
@@ -124,13 +138,13 @@ export default async function PlayView(container, params) {
         <div id="solo-controls" class="hidden">
           <button id="new-solo-game-btn" class="w-full py-4 bg-secondary text-on-secondary font-headline-sm text-headline-sm rounded-xl btn-tactile transition-all flex items-center justify-center gap-md">
             <span class="material-symbols-outlined" style="font-variation-settings:'FILL'1">refresh</span>
-            New Solo Game
+            New Practice Session
           </button>
         </div>
 
-        <!-- Leave Game -->
+        <!-- Leave -->
         <button id="leave-game-btn" class="w-full py-3 text-outline font-label-caps text-label-caps hover:text-error transition-colors">
-          Leave Game
+          Leave Session
         </button>
       </div>
     </div>
@@ -147,6 +161,7 @@ export default async function PlayView(container, params) {
   let gameActive = false;
   let currentLetter = null;
   let botTimer = null;
+  let gameMode = 'turns_timed'; // 'turns_timed' | 'turns_relaxed' | 'free_for_all'
 
   try {
     const user = await ensureAuth();
@@ -177,7 +192,7 @@ export default async function PlayView(container, params) {
   // =========================================================
   function initSoloMode() {
     container.querySelector('#game-title').textContent = 'Solo Practice';
-    container.querySelector('#game-subtitle').textContent = 'Play against the bot!';
+    container.querySelector('#game-subtitle').textContent = 'Practice with the word bot';
     container.querySelector('#solo-controls').classList.remove('hidden');
 
     group = {
@@ -188,7 +203,6 @@ export default async function PlayView(container, params) {
       current_letter: null,
     };
 
-    // Scoreboard: player + bot
     updateSoloScoreboard({ player: 0, bot: 0 });
 
     container.querySelector('#play-loading').classList.add('hidden');
@@ -200,10 +214,8 @@ export default async function PlayView(container, params) {
     showWordInput();
     updateTurnIndicator();
 
-    // Bot timer (delayed response)
     botTimer = null;
 
-    // Setup controls
     setupWordInput();
     setupLeaveButton();
     setupDictionaryButton();
@@ -220,7 +232,7 @@ export default async function PlayView(container, params) {
           </div>
           <div>
             <p class="font-headline-sm text-headline-sm">${myProfile?.display_name || 'You'}</p>
-            <p class="font-label-caps text-label-caps text-outline">Player</p>
+            <p class="font-label-caps text-label-caps text-outline">Student</p>
           </div>
         </div>
         <span class="font-headline-md text-headline-md font-bold text-primary">${scores.player}</span>
@@ -232,7 +244,7 @@ export default async function PlayView(container, params) {
           </div>
           <div>
             <p class="font-headline-sm text-headline-sm">Word Bot</p>
-            <p class="font-label-caps text-label-caps text-outline">Computer</p>
+            <p class="font-label-caps text-label-caps text-outline">Practice Partner</p>
           </div>
         </div>
         <span class="font-headline-md text-headline-md font-bold text-tertiary">${scores.bot}</span>
@@ -247,7 +259,6 @@ export default async function PlayView(container, params) {
     hideWordInput();
     showTimer(false);
 
-    // Simulate bot thinking
     botTimer = setTimeout(() => {
       if (!gameActive) return;
 
@@ -255,17 +266,14 @@ export default async function PlayView(container, params) {
 
       if (lastLetter) {
         const candidates = getWordsStartingWith(lastLetter);
-        // Pick a random word that hasn't been used
         const used = new Set(words.map(w => w.word.toLowerCase()));
         const available = candidates.filter(w => !used.has(w.toLowerCase()));
         if (available.length > 0) {
           botWord = available[Math.floor(Math.random() * available.length)];
         } else {
-          // Bot couldn't find a word - it "loses" the round
           botWord = '';
         }
       } else {
-        // First word: bot picks a random word
         const candidates = ['cat', 'dog', 'sun', 'run', 'big', 'red', 'hat', 'pen', 'cup', 'bed'];
         botWord = candidates[Math.floor(Math.random() * candidates.length)];
       }
@@ -287,10 +295,8 @@ export default async function PlayView(container, params) {
         updateTurnIndicator();
         startTurnTimer(60);
 
-        // Update solo scores
         updateChainCount();
       } else {
-        // Bot gives up
         addWordToChain({
           word: '🤖 Bot gave up!',
           points: 0,
@@ -299,33 +305,29 @@ export default async function PlayView(container, params) {
           is_message: true,
           created_at: new Date().toISOString(),
         });
-        // Player wins this round
         gameActive = false;
         showToast('success', 'You win! The bot couldn\'t find a word.');
         disableGameControls();
       }
 
       updateChainCount();
-    }, 1500 + Math.random() * 2000); // Bot "thinks" for 1.5-3.5 seconds
+    }, 1500 + Math.random() * 2000);
   }
 
   function setupNewSoloGame() {
     container.querySelector('#new-solo-game-btn').addEventListener('click', () => {
       stopTimer();
-      // Reset solo game
       words = [];
       gameActive = true;
       currentLetter = null;
       isMyTurn = true;
       updateSoloScoreboard({ player: 0, bot: 0 });
 
-      // Clear chain
       container.querySelector('#chain-list').innerHTML = '';
       container.querySelector('#chain-list').classList.add('hidden');
       container.querySelector('#chain-empty').classList.remove('hidden');
       updateChainCount();
 
-      // Clear input
       container.querySelector('#word-input').value = '';
       container.querySelector('#word-feedback').classList.add('hidden');
 
@@ -338,7 +340,7 @@ export default async function PlayView(container, params) {
         botTimer = null;
       }
 
-      showToast('success', 'New solo game started!');
+      showToast('success', 'New practice session started!');
     });
   }
 
@@ -346,22 +348,48 @@ export default async function PlayView(container, params) {
   // MULTIPLAYER MODE
   // =========================================================
   async function initMultiplayerMode() {
-    // Always fetch fresh game data — don't rely on stale store data
     try {
       group = await getGroupWithMembers(currentGameId);
     } catch (e) {
-      throw new Error('Could not load game data. It may have ended.');
+      throw new Error('Could not load study session data. It may have ended.');
     }
 
-    if (!group) throw new Error('Game not found.');
+    if (!group) throw new Error('Study session not found.');
 
-    container.querySelector('#game-title').textContent = group.name || 'Game';
-    container.querySelector('#game-subtitle').textContent = `Code: ${group.code || ''}`;
+    // Set game mode from the group data
+    gameMode = group.game_mode || 'turns_timed';
 
-    // Update scoreboard
+    container.querySelector('#game-title').textContent = group.name || 'Study Session';
+    container.querySelector('#game-subtitle').textContent = `Code: ${group.code || ''} · ${MODE_LABELS[gameMode]?.label || 'Study'}`;
+
+    // Show mode badge
+    const modeBadge = container.querySelector('#mode-badge');
+    if (modeBadge) {
+      modeBadge.textContent = MODE_LABELS[gameMode]?.label || 'Study';
+      modeBadge.classList.remove('hidden');
+      // Style based on mode
+      if (gameMode === 'free_for_all') {
+        modeBadge.className = 'px-3 py-1 bg-secondary-container/20 text-secondary font-label-caps text-label-caps rounded-full';
+      } else if (gameMode === 'turns_relaxed') {
+        modeBadge.className = 'px-3 py-1 bg-tertiary-container/20 text-tertiary font-label-caps text-label-caps rounded-full';
+      } else {
+        modeBadge.className = 'px-3 py-1 bg-surface-container-high text-outline font-label-caps text-label-caps rounded-full';
+      }
+    }
+
+    // For free_for_all and turns_relaxed: always show input
+    // The DB trigger enforces turn order regardless — non-turn players
+    // get a friendly error if they try to submit. But the box is always
+    // visible so players in an async session can see it when they open the page.
+    if (gameMode === 'free_for_all' || gameMode === 'turns_relaxed') {
+      showWordInput();
+      if (gameMode === 'free_for_all') {
+        container.querySelector('#turn-indicator').classList.add('hidden');
+      }
+    }
+
     renderScoreboard(group.members || []);
 
-    // Load existing words
     try {
       words = await getGameWords(currentGameId);
       renderChain(words);
@@ -372,28 +400,24 @@ export default async function PlayView(container, params) {
     container.querySelector('#play-loading').classList.add('hidden');
     container.querySelector('#play-content').classList.remove('hidden');
 
-    // Check game state
     if (group.status === 'active') {
       gameActive = true;
       checkTurn();
     } else if (group.status === 'waiting') {
       gameActive = false;
-      container.querySelector('#turn-text').textContent = 'Waiting for host to start the game...';
+      container.querySelector('#turn-text').textContent = '⏳ Waiting for host to start the session...';
     } else if (group.status === 'finished') {
       gameActive = false;
-      container.querySelector('#turn-text').textContent = 'Game has ended!';
+      container.querySelector('#turn-text').textContent = 'Session completed!';
       disableGameControls();
     }
 
-    // Setup controls
     setupWordInput();
     setupLeaveButton();
     setupDictionaryButton();
 
-    // Subscribe to realtime updates
     unsubscribe = await subscribeToGame(currentGameId, {
       onWordInserted: (newWord) => {
-        // Reload words to get full profile info
         getGameWords(currentGameId).then(updatedWords => {
           words = updatedWords;
           renderChain(updatedWords);
@@ -411,15 +435,15 @@ export default async function PlayView(container, params) {
 
         if (updatedGroup.status === 'active' && !gameActive) {
           gameActive = true;
-          showToast('info', 'Game started!');
+          showToast('success', 'Session started!');
           checkTurn();
         }
 
         if (updatedGroup.status === 'finished') {
           gameActive = false;
-          showToast('info', 'Game has ended!');
+          showToast('info', 'Session ended.');
           disableGameControls();
-          container.querySelector('#turn-text').textContent = '🏁 Game Over!';
+          container.querySelector('#turn-text').textContent = '📚 Session Complete!';
           updateTurnIndicator();
         }
 
@@ -448,15 +472,22 @@ export default async function PlayView(container, params) {
   function checkTurn() {
     if (!gameActive) return;
 
-    const isMyTurnNow = group.current_turn_player_id === myUserId;
     currentLetter = group.current_letter || null;
+    isMyTurn = group.current_turn_player_id === myUserId;
 
-    if (isMyTurnNow) {
-      isMyTurn = true;
+    // free_for_all and turns_relaxed: input is always visible
+    // The DB trigger enforces who can actually submit.
+    if (gameMode === 'free_for_all' || gameMode === 'turns_relaxed') {
+      showTimer(false);
+      updateTurnIndicator();
+      return;
+    }
+
+    // turns_timed: input visible only on your turn, with timer
+    if (isMyTurn) {
       showWordInput();
       startTurnTimer(group.turn_seconds || 60);
     } else {
-      isMyTurn = false;
       hideWordInput();
       showTimer(false);
     }
@@ -473,10 +504,9 @@ export default async function PlayView(container, params) {
     const submitBtn = container.querySelector('#submit-word-btn');
     const feedback = container.querySelector('#word-feedback');
 
-    // Live letter prefix hint
     input.addEventListener('input', () => {
       const prefix = container.querySelector('#input-letter-prefix');
-      if (currentLetter && isMyTurn) {
+      if (currentLetter) {
         prefix.textContent = currentLetter.toUpperCase();
         prefix.classList.remove('hidden');
         input.style.paddingLeft = '2.5rem';
@@ -485,21 +515,16 @@ export default async function PlayView(container, params) {
         input.style.paddingLeft = '';
       }
 
-      // Clear feedback on new input
       feedback.classList.add('hidden');
-
-      // Enable/disable submit
       submitBtn.disabled = input.value.trim().length < 2;
     });
 
-    // Submit on Enter
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {
         submitBtn.click();
       }
     });
 
-    // Submit word
     submitBtn.addEventListener('click', async () => {
       const word = input.value.trim().toUpperCase();
       if (!word || word.length < 2) {
@@ -513,35 +538,31 @@ export default async function PlayView(container, params) {
       }
 
       if (!checkChainRule(word, currentLetter)) {
-        showWordFeedback(`Word must start with "${currentLetter.toUpperCase()}"!`, 'error');
+        showWordFeedback(`Word must start with \"${currentLetter.toUpperCase()}\"!`, 'error');
         return;
       }
 
-      // Check if it's a real English word — local list first (instant), then API fallback
       if (!isValidWord(word)) {
         try {
           await fetchDefinition(word);
         } catch {
-          showWordFeedback(`"${word}" is not a recognized English word.`, 'error');
+          showWordFeedback(`\"${word}\" is not a recognized English word.`, 'error');
           return;
         }
       }
 
-      // Check for duplicates in current chain
       const wordLower = word.toLowerCase();
       const isDuplicate = words.some(w => w.word?.toLowerCase() === wordLower || w.word_lower === wordLower);
       if (isDuplicate) {
-        showWordFeedback(`"${word}" has already been used!`, 'error');
+        showWordFeedback(`\"${word}\" has already been used!`, 'error');
         return;
       }
 
-      // Disable input while submitting
       submitBtn.disabled = true;
       submitBtn.innerHTML = '<div class="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>';
 
       try {
         if (isSolo) {
-          // Solo mode: add word locally
           const points = calculateScore(word, true);
           addWordToChain({
             word: word,
@@ -554,22 +575,19 @@ export default async function PlayView(container, params) {
           feedback.classList.add('hidden');
           updateChainCount();
 
-          // Update player score
           const currentScores = getSoloScores();
           currentScores.player += points;
           updateSoloScoreboard(currentScores);
 
-          // Stop timer, bot's turn
           stopTimer();
           currentLetter = getLastLetter(word);
           showTimer(false);
           botPlay(currentLetter);
         } else {
-          // Multiplayer: submit to Supabase
           const data = await submitWord(currentGameId, word);
           input.value = '';
           feedback.classList.add('hidden');
-          showToast('success', `"${word}" submitted! +${data.points || word.length - 2} pts`);
+          showToast('success', `\"${word}\" submitted! +${data.points || word.length - 2} pts`);
         }
       } catch (error) {
         showWordFeedback(error.message, 'error');
@@ -582,7 +600,7 @@ export default async function PlayView(container, params) {
 
   function setupLeaveButton() {
     container.querySelector('#leave-game-btn').addEventListener('click', () => {
-      if (confirm('Leave this game?')) {
+      if (confirm('Leave this study session?')) {
         cleanup();
         navigate('/');
       }
@@ -604,28 +622,28 @@ export default async function PlayView(container, params) {
   function renderScoreboard(members) {
     const board = container.querySelector('#scoreboard');
     if (!members || members.length === 0) {
-      board.innerHTML = '<p class="font-body-md text-body-md text-outline text-center py-4">No players yet.</p>';
+      board.innerHTML = '<p class="font-body-md text-body-md text-outline text-center py-4">No students yet.</p>';
       return;
     }
 
-    // Sort by score descending
     const sorted = [...members].sort((a, b) => (b.score || 0) - (a.score || 0));
 
     board.innerHTML = sorted.map((m, i) => {
       const p = m.profiles || {};
-      const avatarUrl = `https://api.dicebear.com/8.x/adventurer/svg?seed=${p.avatar_seed || m.player_id}`;
       const isMe = m.player_id === myUserId;
-      const isCurrent = m.player_id === group?.current_turn_player_id;
+      const isCurrent = gameMode !== 'free_for_all' && m.player_id === group?.current_turn_player_id;
       const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : '';
 
       return `
         <div class="flex items-center justify-between p-gap-md bg-surface-container rounded-xl ${isMe ? 'ring-2 ring-primary/30' : ''} ${isCurrent ? 'animate-pulse-border' : ''}">
           <div class="flex items-center gap-gap-md min-w-0">
             <span class="font-headline-sm text-headline-sm text-outline w-5 flex-shrink-0">${medal || (i + 1)}</span>
-            <img src="${avatarUrl}" alt="" class="w-9 h-9 rounded-full bg-surface-container-highest flex-shrink-0" />
+            <div class="w-9 h-9 rounded-full bg-primary flex items-center justify-center text-on-primary font-bold text-sm flex-shrink-0">
+              ${(p.display_name || 'Player ' + (i + 1)).slice(0, 2).toUpperCase()}
+            </div>
             <div class="min-w-0">
-              <p class="font-headline-sm text-headline-sm truncate">${p.display_name || 'Player ' + (i + 1)} ${isMe ? '(You)' : ''}</p>
-              <p class="font-label-caps text-label-caps text-outline">${isCurrent ? '🔵 Playing...' : ''}</p>
+              <p class="font-headline-sm text-headline-sm truncate">${p.display_name || 'Student ' + (i + 1)} ${isMe ? '(You)' : ''}</p>
+              <p class="font-label-caps text-label-caps text-outline">${isCurrent ? '🔵 Contributing...' : ''}</p>
             </div>
           </div>
           <span class="font-headline-md text-headline-md font-bold text-primary flex-shrink-0 ml-2">${m.score || 0}</span>
@@ -661,7 +679,6 @@ export default async function PlayView(container, params) {
     empty.classList.add('hidden');
     list.classList.remove('hidden');
 
-    // Show newest first (already sorted)
     list.innerHTML = wordsArray.map((w, idx) => {
       const isLast = idx === 0;
       const nextWord = idx < wordsArray.length - 1 ? wordsArray[idx + 1] : null;
@@ -685,10 +702,10 @@ export default async function PlayView(container, params) {
           <div class="flex-1 min-w-0">
             <div class="flex items-center gap-2">
               <span class="font-headline-sm text-headline-sm font-bold ${isLast ? 'text-primary' : ''}">${w.word}</span>
-              ${isLast ? '<span class="px-2 py-0.5 bg-primary text-on-primary text-[10px] font-bold uppercase rounded-full">NEW</span>' : ''}
+              ${isLast ? '<span class=\"px-2 py-0.5 bg-primary text-on-primary text-[10px] font-bold uppercase rounded-full\">NEW</span>' : ''}
             </div>
             <p class="font-label-caps text-label-caps text-outline">
-              ${w.player_name || w.profiles?.display_name || 'Player'} · +${w.points || 0} pts
+              ${w.player_name || w.profiles?.display_name || 'Student'} · +${w.points || 0} pts
               · ${formatTimeAgo(w.created_at)}
             </p>
           </div>
@@ -705,14 +722,12 @@ export default async function PlayView(container, params) {
       `;
     }).join('');
 
-    // Add word lookup handlers
     list.querySelectorAll('.lookup-word').forEach(btn => {
       btn.addEventListener('click', () => {
         openDictionary(btn.dataset.word);
       });
     });
 
-    // Scroll to top (newest word)
     const chainContainer = container.querySelector('#chain-container');
     chainContainer.scrollTop = 0;
   }
@@ -727,15 +742,27 @@ export default async function PlayView(container, params) {
     const requiredLetter = container.querySelector('#required-letter');
 
     if (!gameActive) {
-      turnText.textContent = '⏸️ Game paused';
+      turnText.textContent = '⏸️ Session paused';
       return;
     }
 
-    if (isMyTurn) {
+    if (gameMode === 'free_for_all') {
+      turnText.textContent = words.length > 0
+        ? '🌿 Open practice — add any word that follows the chain!'
+        : '🌿 Open practice — be the first to add a word!';
+    } else if (gameMode === 'turns_relaxed') {
+      if (isMyTurn) {
+        turnText.textContent = '🎯 Your turn — the word box is ready for you! (No pressure, take your time.)';
+      } else {
+        const currentPlayer = group?.members?.find(m => m.player_id === group?.current_turn_player_id);
+        const name = currentPlayer?.profiles?.display_name || 'Another student';
+        turnText.textContent = `⏳ ${name} is up next. You can try submitting, but the chain expects their word first.`;
+      }
+    } else if (isMyTurn) {
       turnText.textContent = '🎯 Your turn! Type a word!';
     } else {
       const currentPlayer = group?.members?.find(m => m.player_id === group?.current_turn_player_id);
-      const name = currentPlayer?.profiles?.display_name || 'Other player';
+      const name = currentPlayer?.profiles?.display_name || 'Another student';
       turnText.textContent = `⏳ Waiting for ${name}...`;
     }
 
@@ -786,7 +813,6 @@ export default async function PlayView(container, params) {
         const pct = (secondsLeft / (seconds || 60)) * 100;
         timerBar.style.width = `${pct}%`;
 
-        // Warning colors
         if (secondsLeft <= 10) {
           timerBar.classList.remove('bg-primary');
           timerBar.classList.add('bg-error');
@@ -815,8 +841,7 @@ export default async function PlayView(container, params) {
 
   function handleTimeOut() {
     if (isSolo) {
-      // In solo mode, timeout means bot's turn or game pause
-      showToast('error', 'Time\'s up!');
+      showToast('info', 'Time\'s up! Starting a new round...');
       isMyTurn = false;
       hideWordInput();
       showTimer(false);
@@ -824,13 +849,11 @@ export default async function PlayView(container, params) {
       disableGameControls();
       gameActive = false;
     } else {
-      // In multiplayer, skip turn to next player
-      showToast('error', 'Time\'s up! Skipping to next player...');
+      showToast('info', 'Time\'s up! Moving to next student...');
       isMyTurn = false;
       hideWordInput();
       showTimer(false);
       updateTurnIndicator();
-      // Advance turn on the server — Realtime or polling will update the UI
       skipTurn(currentGameId).catch(() => {});
     }
   }
@@ -858,8 +881,6 @@ export default async function PlayView(container, params) {
     }
   }
 
-  // formatTimeAgo now imported from utils/ui.js
-
   function cleanup() {
     stopTimer();
     if (botTimer) clearTimeout(botTimer);
@@ -870,7 +891,6 @@ export default async function PlayView(container, params) {
     store.set('currentGroup', null);
   }
 
-  // Return cleanup function
   return () => {
     cleanup();
   };

@@ -91,15 +91,19 @@ export async function upsertProfile(profile) {
 }
 
 /**
- * Create a new group (game lobby)
+ * Create a new group (study session) and add host as first member
+ * @param {string} name - Group/session name
+ * @param {string} gameMode - 'turns_timed' | 'turns_relaxed' | 'free_for_all'
  */
-export async function createGroup(name) {
+export async function createGroup(name, gameMode = 'turns_timed') {
   const user = await ensureAuth();
   if (!user) throw new Error('Not authenticated');
 
   // Get the generated code from the database function
   const { data: codeData, error: codeError } = await supabase
     .rpc('generate_group_code');
+
+  let group;
 
   if (codeError) {
     // Fallback: generate code client-side
@@ -112,28 +116,47 @@ export async function createGroup(name) {
         name: name || `${code}`,
         host_id: user.id,
         status: 'waiting',
+        game_mode: gameMode,
       })
       .select()
       .single();
 
     if (error) throw error;
-    return data;
+    group = data;
+  } else {
+    const code = codeData;
+    const { data, error } = await supabase
+      .from('groups')
+      .insert({
+        code,
+        name: name || code,
+        host_id: user.id,
+        status: 'waiting',
+        game_mode: gameMode,
+      })
+      .select()
+      .single();
+
+    if (error) throw error;
+    group = data;
   }
 
-  const code = codeData;
-  const { data, error } = await supabase
-    .from('groups')
+  // IMPORTANT: Add the host as a group_member so turn rotation works correctly.
+  // Without this, start_game() and skip_turn() cannot find the host in the turn order.
+  const { error: joinError } = await supabase
+    .from('group_members')
     .insert({
-      code,
-      name: name || code,
-      host_id: user.id,
-      status: 'waiting',
-    })
-    .select()
-    .single();
+      group_id: group.id,
+      player_id: user.id,
+      turn_position: 1,
+      score: 0,
+    });
 
-  if (error) throw error;
-  return data;
+  if (joinError && joinError.code !== '23505') {
+    console.warn('Could not add host to group_members:', joinError.message);
+  }
+
+  return group;
 }
 
 /**
@@ -259,13 +282,15 @@ export async function submitWord(groupId, word) {
     if (error.code === '23505') {
       throw new Error('This word has already been used in this game!');
     }
-    if (error.code === 'NTURN' || error.message?.includes('Not your turn')) {
+    // NOTE: PostgreSQL custom errcodes are NOT supported (they cause
+    // 'unrecognized exception condition' errors). We detect by message text only.
+    if (error.message?.includes('Not your turn')) {
       throw new Error('It is not your turn!');
     }
-    if (error.code === 'WSTART' || error.message?.includes('must start with')) {
+    if (error.message?.includes('must start with')) {
       throw new Error(error.message || 'Word must start with the required letter');
     }
-    if (error.code === 'GNACT' || error.message?.includes('not active')) {
+    if (error.message?.includes('not active')) {
       throw new Error('The game has not started yet or has ended.');
     }
     throw error;

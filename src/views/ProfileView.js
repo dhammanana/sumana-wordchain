@@ -36,8 +36,9 @@ export default async function ProfileView(container, params) {
           <div class="flex flex-col items-center gap-gap-md mb-gap-lg">
             <div class="relative group">
               <div class="w-24 h-24 md:w-28 md:h-28 rounded-full border-4 border-surface-container-high overflow-hidden bg-surface-container">
-                <img id="profile-avatar" class="w-full h-full object-cover"
-                  src="https://api.dicebear.com/8.x/adventurer/svg?seed=default" alt="Avatar" />
+                <div id="profile-avatar" class="w-full h-full bg-primary text-on-primary flex items-center justify-center font-display-lg text-display-lg-mobile">
+                  ?
+                </div>
               </div>
               <label class="absolute inset-0 bg-on-background/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer rounded-full" for="profile-avatar-seed">
                 <span class="material-symbols-outlined text-surface text-2xl">refresh</span>
@@ -176,7 +177,8 @@ export default async function ProfileView(container, params) {
 
     container.querySelector('#profile-name').value = name;
     container.querySelector('#profile-avatar-seed').value = avatarSeed;
-    container.querySelector('#profile-avatar').src = `https://api.dicebear.com/8.x/adventurer/svg?seed=${avatarSeed}`;
+    // Show initials in avatar circle
+    updateAvatarDisplay(name);
 
     // Set active theme
     container.querySelectorAll('.theme-chip').forEach(btn => {
@@ -228,7 +230,30 @@ export default async function ProfileView(container, params) {
   function shuffleAvatar() {
     const seed = Math.random().toString(36).substring(2, 8);
     container.querySelector('#profile-avatar-seed').value = seed;
-    container.querySelector('#profile-avatar').src = `https://api.dicebear.com/8.x/adventurer/svg?seed=${seed}`;
+    // Rotate background color
+    updateAvatarDisplay(container.querySelector('#profile-name').value.trim());
+  }
+
+  // Update avatar display
+  function updateAvatarDisplay(name) {
+    const avatar = container.querySelector('#profile-avatar');
+    if (!avatar) return;
+    const seed = container.querySelector('#profile-avatar-seed').value || 'default';
+    const colors = ['bg-primary text-on-primary', 'bg-secondary text-on-secondary', 'bg-tertiary text-on-tertiary', 'bg-error text-on-error'];
+    const colorIdx = Math.abs(hashCode(seed)) % colors.length;
+    avatar.className = `w-full h-full flex items-center justify-center font-display-lg text-display-lg-mobile ${colors[colorIdx]}`;
+    avatar.textContent = (name || '?').slice(0, 2).toUpperCase() || '?';
+  }
+
+  // Simple hash for deterministic color selection
+  function hashCode(str) {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+      const char = str.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash |= 0;
+    }
+    return hash;
   }
 
   // Save profile
