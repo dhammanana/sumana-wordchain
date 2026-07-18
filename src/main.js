@@ -83,15 +83,6 @@ async function init() {
     }
   });
 
-  // Re-render the current route when auth state changes so views like
-  // HomeView (which reads user/profile from the store) update in place.
-  function rerenderCurrentRoute() {
-    const hash = window.location.hash || '#/';
-    if (hash === '#/' || hash === '' || hash === '#') {
-      navigate('/');
-    }
-  }
-
   // Initialize router (after session is restored)
   initRouter(container);
 

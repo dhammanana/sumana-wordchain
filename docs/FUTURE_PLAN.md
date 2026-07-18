@@ -7,8 +7,8 @@ Tracked for later sessions. Status legend: ✅ done · 🔧 partial · ⬜ todo.
 - ✅ `main.js`: restore session BEFORE router init; re-render HomeView on auth change.
 - ✅ Treat anonymous sessions as logged-out in `main.js` + `HomeView`.
 - ⬜ Verify in browser: logged-in user no longer sees login screen on refresh.
-- ⬜ Consider a global store subscription so ANY view re-renders on auth change
-  (current fix only re-renders HomeView via `navigate('/')`).
+- ✅ Global store subscription: `router.rerenderCurrentRoute()` now re-renders
+  ANY active view on auth change (not just HomeView). Wired in `main.js`.
 
 ## B. Turn / guided-mode reliability
 - ✅ Added `syncTurnState()` + 4s poll fallback in `PlayView` to self-heal missed

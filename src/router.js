@@ -167,6 +167,9 @@ export function rerenderCurrentRoute() {
 function updateActiveNav(currentPath) {
   document.querySelectorAll('.nav-item').forEach(item => {
     const route = item.dataset.route;
-    item.classList.toggle('active', currentPath === route || currentPath.startsWith(route));
+    // The root route "/" must match exactly, otherwise every path
+    // (which all start with "/") would keep Home highlighted.
+    const isActive = route === '/' ? currentPath === '/' : currentPath.startsWith(route);
+    item.classList.toggle('active', isActive);
   });
 }
