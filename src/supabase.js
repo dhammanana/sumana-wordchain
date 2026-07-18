@@ -9,80 +9,135 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
     autoRefreshToken: true,
   },
   realtime: {
-    params: {
-      eventsPerSecond: 10,
-    },
+    params: { eventsPerSecond: 10 },
   },
 });
 
 /**
- * Wrap a promise with a timeout so it doesn't hang forever.
- * Resolves to null on timeout.
+ * Wrap a promise with a timeout
  */
-async function withTimeout(promise, ms = 5000) {
+async function withTimeout(promise, ms = 8000) {
   let timer;
-  const timeout = new Promise((resolve) => {
-    timer = setTimeout(() => resolve(null), ms);
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error('Request timed out')), ms);
   });
   try {
-    const result = await Promise.race([promise, timeout]);
-    return result;
+    return await Promise.race([promise, timeout]);
   } finally {
     clearTimeout(timer);
   }
 }
 
 /**
- * Sign in anonymously (creates a stable user identity per browser)
- * Falls back to local mode gracefully if Supabase is unreachable.
+ * Sign in with a social provider (Google, Facebook, GitHub)
  */
-export async function ensureAuth() {
-  const result = await withTimeout(supabase.auth.getSession());
-  const session = result?.data?.session;
-  if (session?.user) return session.user;
-
-  const authResult = await withTimeout(supabase.auth.signInAnonymously());
-  if (!authResult) {
-    console.warn('Auth timed out or failed, running in local/offline mode');
-    return null;
-  }
-  const { data, error } = authResult;
-  if (error) {
-    console.warn('Anonymous auth failed, falling back to local mode:', error.message);
-    return null;
-  }
-  return data?.user || null;
+export async function signInWithProvider(provider) {
+  const { data, error } = await supabase.auth.signInWithOAuth({
+    provider,
+    options: {
+      redirectTo: window.location.origin + '/wordchain/',
+    },
+  });
+  if (error) throw error;
+  return data;
 }
 
 /**
- * Get the current user's profile from the database, or null
+ * Sign out
  */
-export async function getProfile() {
-  const user = await ensureAuth();
-  if (!user) return null;
+export async function signOut() {
+  const { error } = await supabase.auth.signOut();
+  if (error) throw error;
+}
+
+/**
+ * Get current session / user
+ */
+export async function getSession() {
+  const { data, error } = await withTimeout(supabase.auth.getSession());
+  if (error) throw error;
+  return data?.session || null;
+}
+
+/**
+ * Get current user
+ */
+export async function getCurrentUser() {
+  const session = await getSession();
+  return session?.user || null;
+}
+
+/**
+ * Get the user's profile from the database
+ */
+export async function getProfile(userId) {
+  if (!userId) return null;
 
   const { data, error } = await supabase
     .from('profiles')
     .select('*')
-    .eq('id', user.id)
+    .eq('id', userId)
     .single();
 
-  if (error && error.code !== 'PGRST116') { // PGRST116 = not found
+  if (error && error.code !== 'PGRST116') {
     console.warn('Error fetching profile:', error.message);
   }
   return data || null;
 }
 
 /**
+ * Ensure a profile exists for the current user.
+ * Creates one from the OAuth provider data (Google/Facebook/GitHub) if missing.
+ * Returns the profile row.
+ */
+export async function ensureProfile() {
+  const user = await getCurrentUser();
+  if (!user) return null;
+
+  // Try to load existing profile
+  let profile = await getProfile(user.id);
+  if (profile) return profile;
+
+  // Build profile data from the OAuth identity
+  const meta = user.user_metadata || {};
+  const provider = user.app_metadata?.provider || user.identities?.[0]?.provider || 'google';
+
+  const profileData = {
+    id: user.id,
+    display_name: meta.full_name || meta.name || meta.user_name || user.email?.split('@')[0] || 'Player',
+    avatar_url: meta.avatar_url || meta.picture || null,
+    email: user.email || null,
+    provider,
+    gems: 0,
+    total_score: 0,
+    total_days_active: 0,
+  };
+
+  try {
+    const { data, error } = await supabase
+      .from('profiles')
+      .upsert(profileData, { onConflict: 'id' })
+      .select()
+      .single();
+
+    if (error) {
+      console.warn('Could not create profile:', error.message);
+      return null;
+    }
+    return data;
+  } catch (e) {
+    console.warn('Profile creation failed:', e.message);
+    return null;
+  }
+}
+
+/**
  * Create or update the user's profile
  */
 export async function upsertProfile(profile) {
-  const user = await ensureAuth();
-  if (!user) throw new Error('Not authenticated');
-
   const { data, error } = await supabase
     .from('profiles')
-    .upsert({ id: user.id, ...profile })
+    .upsert(profile, { onConflict: 'id' })
     .select()
     .single();
 
@@ -91,58 +146,57 @@ export async function upsertProfile(profile) {
 }
 
 /**
- * Create a new group (study session) and add host as first member
- * @param {string} name - Group/session name
- * @param {string} gameMode - 'turns_timed' | 'turns_relaxed' | 'free_for_all'
+ * Track user activity (daily active days)
  */
-export async function createGroup(name, gameMode = 'turns_timed') {
-  const user = await ensureAuth();
+export async function trackActivity() {
+  const user = await getCurrentUser();
+  if (!user) return;
+  await supabase.rpc('track_user_activity', { user_id_param: user.id });
+}
+
+/**
+ * Create a new group
+ */
+export async function createGroup(name, gameMode = 'turns_timed', rules = {}) {
+  const user = await getCurrentUser();
   if (!user) throw new Error('Not authenticated');
 
-  // Get the generated code from the database function
   const { data: codeData, error: codeError } = await supabase
     .rpc('generate_group_code');
 
-  let group;
-
+  let code;
   if (codeError) {
-    // Fallback: generate code client-side
-    const code = `${randomWord()}-${randomWord()}-${Math.floor(Math.random() * 99) + 1}`;
-
-    const { data, error } = await supabase
-      .from('groups')
-      .insert({
-        code,
-        name: name || `${code}`,
-        host_id: user.id,
-        status: 'waiting',
-        game_mode: gameMode,
-      })
-      .select()
-      .single();
-
-    if (error) throw error;
-    group = data;
+    code = `${randomWord()}-${randomWord()}-${Math.floor(Math.random() * 99) + 1}`;
   } else {
-    const code = codeData;
-    const { data, error } = await supabase
-      .from('groups')
-      .insert({
-        code,
-        name: name || code,
-        host_id: user.id,
-        status: 'waiting',
-        game_mode: gameMode,
-      })
-      .select()
-      .single();
-
-    if (error) throw error;
-    group = data;
+    code = codeData;
   }
 
-  // IMPORTANT: Add the host as a group_member so turn rotation works correctly.
-  // Without this, start_game() and skip_turn() cannot find the host in the turn order.
+  const insertObj = {
+    code,
+    name: name || code,
+    host_id: user.id,
+    status: 'waiting',
+    game_mode: gameMode,
+    turn_seconds: rules.turnSeconds || 60,
+    win_score: rules.winScore || null,
+    dead_mode: !!rules.deadMode,
+    banned_vowels: (rules.bannedVowels || []).join(','),
+    min_length: rules.minLength || 2,
+    banned_suffixes: (rules.bannedSuffixes || []).join(','),
+    allowed_pos: (rules.allowedPos || []).join(','),
+    combat_mode: !!rules.combatMode,
+    gem_wager: rules.gemWager || 0,
+  };
+
+  const { data: group, error } = await supabase
+    .from('groups')
+    .insert(insertObj)
+    .select()
+    .single();
+
+  if (error) throw error;
+
+  // Add host as member
   const { error: joinError } = await supabase
     .from('group_members')
     .insert({
@@ -160,13 +214,12 @@ export async function createGroup(name, gameMode = 'turns_timed') {
 }
 
 /**
- * Join a group by its code (insert into group_members + create profile if needed)
+ * Join a group by code
  */
-export async function joinGroup(code, displayName, avatarSeed) {
-  const user = await ensureAuth();
+export async function joinGroup(code) {
+  const user = await getCurrentUser();
   if (!user) throw new Error('Not authenticated');
 
-  // Find the group
   const { data: group, error: groupError } = await supabase
     .from('groups')
     .select('*')
@@ -175,9 +228,6 @@ export async function joinGroup(code, displayName, avatarSeed) {
 
   if (groupError) throw new Error('Group not found. Check the invite code.');
   if (group.status === 'finished') throw new Error('This game has already ended.');
-
-  // Ensure profile exists
-  await upsertProfile({ display_name: displayName, avatar_seed: avatarSeed || user.id });
 
   // Get current member count for turn_position
   const { data: members } = await supabase
@@ -189,7 +239,6 @@ export async function joinGroup(code, displayName, avatarSeed) {
 
   const nextPosition = members && members.length > 0 ? members[0].turn_position + 1 : 1;
 
-  // Join the group
   const { error: joinError } = await supabase
     .from('group_members')
     .insert({
@@ -210,7 +259,7 @@ export async function joinGroup(code, displayName, avatarSeed) {
 }
 
 /**
- * Get group details with member info
+ * Get group details with members
  */
 export async function getGroupWithMembers(groupId) {
   const { data: group, error: groupError } = await supabase
@@ -254,7 +303,7 @@ export async function startGame(groupId) {
 }
 
 /**
- * Skip the current player's turn (timer expired), advance to next player
+ * Skip turn
  */
 export async function skipTurn(groupId) {
   const { error } = await supabase.rpc('skip_turn', { group_id_param: groupId });
@@ -262,10 +311,56 @@ export async function skipTurn(groupId) {
 }
 
 /**
- * Submit a word to the chain
+ * End the game and record win/loss + settle combat gems.
+ */
+export async function endGame(groupId) {
+  const { error } = await supabase.rpc('end_game', { group_id_param: groupId });
+  if (error) throw error;
+}
+
+/**
+ * A player leaves the game. The `leave_game` RPC removes the member, reassigns
+ * host if needed, advances the turn if it was their turn, and ends the game if
+ * fewer than 2 players remain. This prevents a stalled turn when someone leaves.
+ */
+export async function leaveGame(groupId) {
+  const user = await getCurrentUser();
+  if (!user) throw new Error('Not authenticated');
+  const { error } = await supabase.rpc('leave_game', {
+    group_id_param: groupId,
+    player_id_param: user.id,
+  });
+  if (error) throw error;
+}
+
+/**
+ * Fetch per-player results (win/loss + gem delta) for a finished game.
+ */
+export async function getGameResults(groupId) {
+  const { data, error } = await supabase
+    .from('game_results')
+    .select('player_id, result, gems_delta')
+    .eq('group_id', groupId);
+  if (error) throw error;
+  return data || [];
+}
+
+/**
+ * Dead mode: a player who times out is eliminated and the game ends.
+ */
+export async function deadModeEliminate(groupId, playerId) {
+  const { error } = await supabase.rpc('dead_mode_eliminate', {
+    group_id_param: groupId,
+    player_id_param: playerId,
+  });
+  if (error) throw error;
+}
+
+/**
+ * Submit a word
  */
 export async function submitWord(groupId, word) {
-  const user = await ensureAuth();
+  const user = await getCurrentUser();
   if (!user) throw new Error('Not authenticated');
 
   const { data, error } = await supabase
@@ -282,8 +377,6 @@ export async function submitWord(groupId, word) {
     if (error.code === '23505') {
       throw new Error('This word has already been used in this game!');
     }
-    // NOTE: PostgreSQL custom errcodes are NOT supported (they cause
-    // 'unrecognized exception condition' errors). We detect by message text only.
     if (error.message?.includes('Not your turn')) {
       throw new Error('It is not your turn!');
     }
@@ -299,12 +392,12 @@ export async function submitWord(groupId, word) {
 }
 
 /**
- * Get words in a game
+ * Get game words
  */
 export async function getGameWords(groupId) {
   const { data, error } = await supabase
     .from('game_words')
-    .select('*, profiles(display_name, avatar_seed)')
+    .select('*, profiles(display_name, avatar_url)')
     .eq('group_id', groupId)
     .order('created_at', { ascending: false });
 
@@ -317,16 +410,13 @@ export async function getGameWords(groupId) {
  */
 export async function subscribeToGame(groupId, callbacks) {
   const channelName = `game:${groupId}`;
-  // Supabase internally prefixes topic with 'realtime:' and REUSES existing channels
   const topic = `realtime:${channelName}`;
 
-  // Fully remove any existing channel with the same topic first (must await)
   const existing = supabase.getChannels().find(c => c.topic === topic);
   if (existing) {
     await supabase.removeChannel(existing);
   }
 
-  // Create fresh channel and register all listeners before subscribing
   const channel = supabase.channel(channelName);
 
   channel.on(
@@ -368,7 +458,6 @@ export async function subscribeToGame(groupId, callbacks) {
     }
   );
 
-  // Subscribe after all listeners are registered
   channel.subscribe((status) => {
     if (callbacks.onStatus) callbacks.onStatus(status);
   });
@@ -379,7 +468,7 @@ export async function subscribeToGame(groupId, callbacks) {
 }
 
 /**
- * Get word definition cache from DB
+ * Get cached word definition
  */
 export async function getCachedDefinition(word) {
   const { data, error } = await supabase
@@ -392,7 +481,7 @@ export async function getCachedDefinition(word) {
 }
 
 /**
- * Cache a word definition in the DB
+ * Cache a word definition
  */
 export async function cacheDefinition(word, definitionData) {
   const { error } = await supabase
@@ -404,9 +493,8 @@ export async function cacheDefinition(word, definitionData) {
 /**
  * Get user's game history
  */
-export async function getGameHistory() {
-  const user = await ensureAuth();
-  if (!user) return [];
+export async function getGameHistory(userId) {
+  if (!userId) return [];
 
   const { data, error } = await supabase
     .from('game_words')
@@ -415,7 +503,7 @@ export async function getGameHistory() {
       groups!inner(name, code, status),
       profiles!inner(display_name)
     `)
-    .eq('player_id', user.id)
+    .eq('player_id', userId)
     .order('created_at', { ascending: false })
     .limit(50);
 
@@ -424,35 +512,26 @@ export async function getGameHistory() {
 }
 
 /**
- * Get group history (finished games)
+ * Get group history
  */
-export async function getGroupHistory() {
-  const user = await ensureAuth();
-  if (!user) return [];
+export async function getGroupHistory(userId) {
+  if (!userId) return [];
 
   const { data, error } = await supabase
     .from('group_members')
     .select('*, groups!inner(*)')
-    .eq('player_id', user.id)
+    .eq('player_id', userId)
     .order('joined_at', { ascending: false });
 
   if (error) return [];
   return data || [];
 }
 
-// Helper: random word for fallback code generation
-function randomWord() {
-  const words = ['vibrant', 'clever', 'swift', 'brave', 'calm', 'eager', 'fancy',
-    'grand', 'happy', 'jolly', 'keen', 'lively', 'merry', 'noble', 'proud',
-    'quick', 'sharp', 'smart', 'sunny', 'witty'];
-  return words[Math.floor(Math.random() * words.length)];
-}
-
 /**
- * Check if user is a member of a group
+ * Check if user is a group member
  */
 export async function isGroupMember(groupId) {
-  const user = await ensureAuth();
+  const user = await getCurrentUser();
   if (!user) return false;
 
   const { data, error } = await supabase
@@ -463,4 +542,11 @@ export async function isGroupMember(groupId) {
     .single();
 
   return !!data;
+}
+
+function randomWord() {
+  const words = ['vibrant', 'clever', 'swift', 'brave', 'calm', 'eager', 'fancy',
+    'grand', 'happy', 'jolly', 'keen', 'lively', 'merry', 'noble', 'proud',
+    'quick', 'sharp', 'smart', 'sunny', 'witty'];
+  return words[Math.floor(Math.random() * words.length)];
 }

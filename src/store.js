@@ -64,7 +64,7 @@ export const store = new Store({
   currentGroup: null,
   currentView: '/',
   isOnline: navigator.onLine,
-  connectionStatus: 'disconnected', // disconnected | connecting | connected
+  connectionStatus: 'disconnected',
 });
 
 // Track online status

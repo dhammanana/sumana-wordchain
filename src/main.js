@@ -1,17 +1,11 @@
 /**
  * WordChain - Main Entry Point
- *
- * Initializes the app:
- * 1. Sets up the SPA router and shows the home page immediately
- * 2. Then authenticates with Supabase in the background
- * 3. Loads profile info once authenticated
  */
 import store from './store.js';
-import { initRouter, addRoute, navigate } from './router.js';
-import { ensureAuth, getProfile } from './supabase.js';
+import { initRouter, addRoute, navigate, rerenderCurrentRoute } from './router.js';
+import { supabase, getCurrentUser, getProfile, getSession } from './supabase.js';
+import { updateUserBadge } from './utils/ui.js';
 
-// Lazy-load views for code splitting
-// Each loader receives (container, params) and calls the view function with them
 const HomeView = (c, p) => import('./views/HomeView.js').then(m => m.default(c, p));
 const JoinView = (c, p) => import('./views/JoinView.js').then(m => m.default(c, p));
 const LobbyView = (c, p) => import('./views/LobbyView.js').then(m => m.default(c, p));
@@ -23,7 +17,7 @@ async function init() {
   const container = document.getElementById('view-content');
   if (!container) return;
 
-  // --- Register routes ---
+  // Register routes
   addRoute('/', (c, p) => HomeView(c, p));
   addRoute('/join/:code', (c, p) => JoinView(c, p));
   addRoute('/lobby/:id', (c, p) => LobbyView(c, p));
@@ -31,51 +25,82 @@ async function init() {
   addRoute('/play/solo', (c, p) => PlayView(c, { ...p, id: 'solo' }));
   addRoute('/history', (c, p) => HistoryView(c, p));
   addRoute('/profile', (c, p) => ProfileView(c, p));
-  addRoute('/lobby', (c, p) => {
-    navigate('/');
-    return;
-  });
+  addRoute('/lobby', () => navigate('/'));
 
-  // --- Profile button (register immediately, not waiting for auth) ---
+  // Profile button
   const profileBtn = document.getElementById('profile-btn');
   if (profileBtn) {
     profileBtn.addEventListener('click', () => navigate('/profile'));
   }
 
-  // --- Initialize router FIRST so the UI renders immediately ---
+  // Restore session on startup BEFORE rendering any view, so a logged-in
+  // user is recognised immediately (otherwise HomeView renders the login
+  // screen on first paint and never re-renders).
+  try {
+    const session = await getSession();
+    if (session?.user && !session.user.is_anonymous) {
+      store.set('user', session.user);
+      const { ensureProfile } = await import('./supabase.js');
+      const profile = await ensureProfile();
+      if (profile) {
+        store.set('profile', profile);
+        try {
+          const { trackActivity } = await import('./supabase.js');
+          await trackActivity();
+        } catch (e) {}
+      }
+      updateUserBadge();
+    } else {
+      store.set('user', null);
+      store.set('profile', null);
+    }
+  } catch (e) {
+    console.warn('Session restore:', e.message);
+  }
+
+  // Listen for auth state changes (login / logout / token refresh)
+  supabase.auth.onAuthStateChange((event, session) => {
+    const user = session?.user;
+    if (user && !user.is_anonymous) {
+      store.set('user', user);
+      // ensureProfile is async; refresh profile + re-render after it resolves
+      import('./supabase.js').then(async ({ ensureProfile, trackActivity }) => {
+        const profile = await ensureProfile();
+        if (profile) {
+          store.set('profile', profile);
+          try { await trackActivity(); } catch (e) {}
+        }
+        updateUserBadge();
+        // Re-render the active view so ANY view (not just HomeView) reflects
+        // the new auth state in place.
+        rerenderCurrentRoute();
+      });
+    } else {
+      store.set('user', null);
+      store.set('profile', null);
+      updateUserBadge();
+      rerenderCurrentRoute();
+    }
+  });
+
+  // Re-render the current route when auth state changes so views like
+  // HomeView (which reads user/profile from the store) update in place.
+  function rerenderCurrentRoute() {
+    const hash = window.location.hash || '#/';
+    if (hash === '#/' || hash === '' || hash === '#') {
+      navigate('/');
+    }
+  }
+
+  // Initialize router (after session is restored)
   initRouter(container);
 
-  // --- Handle initial navigation ---
+  // Handle initial navigation
   if (!window.location.hash) {
     navigate('/');
   }
-
-  // --- Auth & Profile (background — won't block rendering) ---
-  bootstrapAuth();
 }
 
-/**
- * Authenticate and load profile in the background.
- * The app works in local/offline mode without auth.
- */
-async function bootstrapAuth() {
-  try {
-    const user = await ensureAuth();
-    if (user) {
-      store.set('user', user);
-      const profile = await getProfile();
-      if (profile) {
-        store.set('profile', profile);
-      }
-    }
-  } catch (e) {
-    // Auth failure is non-fatal — app runs in local/offline mode
-    console.warn('Auth background init:', e.message);
-  }
-
-}
-
-// Wait for DOM and start
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', init);
 } else {

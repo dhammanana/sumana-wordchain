@@ -1,171 +1,144 @@
-/**
- * PlayView - The main study arena for WordChain
- *
- * Features:
- * - Real-time multiplayer word chain study
- * - Three modes: Guided Turns (timed), Relaxed Turns (untimed), Open Practice (anyone anytime)
- * - Turn timer with countdown (turns_timed only)
- * - Word submission with validation
- * - Chain visualization
- * - Progress tracking
- * - Solo study with bot opponent
- *
- * Design note: This app is for monks and Buddhist practitioners.
- * Terminology uses "study", "practice", "learn" rather than "game".
- * UI is calm and mindful, designed for collaborative vocabulary learning.
- */
 import store from '../store.js';
 import { navigate } from '../router.js';
-import { ensureAuth, getGroupWithMembers, submitWord, getGameWords, subscribeToGame, skipTurn } from '../supabase.js';
-import { getWordsStartingWith, isValidWord, checkChainRule, getLastLetter, hasProfanity, calculateScore } from '../utils/words.js';
+import { supabase, getCurrentUser, getProfile, subscribeToGame, submitWord, getGameWords, skipTurn, endGame, deadModeEliminate, leaveGame } from '../supabase.js';
+import { showToast } from '../utils/ui.js';
 import { openDictionary } from '../components/DictionaryModal.js';
-import { fetchDefinition } from '../utils/dictionary.js';
-import { showToast, formatTimeAgo } from '../utils/ui.js';
+import { isValidWord, getWordsStartingWith, checkChainRule, getLastLetter, calculateScore, hasProfanity } from '../utils/words.js';
+import { validateWord, checkWinner } from '../gameLogic.js';
 
 let turnTimer = null;
-let secondsLeft = 60;
+let secondsLeft = 0;
 
-// Descriptive labels for each study mode
 const MODE_LABELS = {
-  turns_timed: { label: 'Guided Turns', icon: 'timer', desc: 'Take turns with a gentle timer.' },
-  turns_relaxed: { label: 'Relaxed Turns', icon: 'self_improvement', desc: 'No time pressure — study at your own pace.' },
-  free_for_all: { label: 'Open Practice', icon: 'diversity_3', desc: 'Anyone can add words anytime.' },
+  turns_timed: { label: 'Timed', icon: 'timer', desc: 'Take turns with a timer' },
+  turns_relaxed: { label: 'Relaxed', icon: 'self_improvement', desc: 'No time pressure' },
+  free_for_all: { label: 'Open', icon: 'diversity_3', desc: 'Anyone can submit' },
 };
 
+/**
+ * PlayView - The game arena
+ */
 export default async function PlayView(container, params) {
   const gameId = params.id;
   const isSolo = gameId === 'solo';
-  store.set('currentView', '/play');
 
   container.innerHTML = `
-    <div class="flex flex-col items-center gap-gap-lg pb-28">
-      <!-- Loading State -->
-      <div id="play-loading" class="flex flex-col items-center justify-center py-20 w-full">
-        <div class="w-10 h-10 border-4 border-primary border-t-transparent rounded-full animate-spin mb-4"></div>
-        <p class="font-body-md text-body-md text-on-surface-variant">Preparing study session...</p>
+    <div class="flex flex-col gap-4 pb-28 animate-fade-in-up">
+      <!-- Loading -->
+      <div id="play-loading" class="flex flex-col items-center justify-center py-20">
+        <div class="w-10 h-10 border-[3px] border-primary border-t-transparent rounded-full animate-spin mb-4"></div>
+        <p class="text-body-md text-dark-text-muted">Loading game...</p>
       </div>
 
-      <!-- Study Content (hidden until loaded) -->
-      <div id="play-content" class="hidden w-full space-y-gap-lg animate-slide-up">
-        <!-- Study Header -->
-        <div class="flex items-center justify-between">
-          <div>
-            <h2 class="font-headline-md text-headline-md" id="game-title">Study Session</h2>
-            <p class="font-body-md text-body-md text-on-surface-variant" id="game-subtitle"></p>
-          </div>
-          <div class="flex items-center gap-3">
-            <!-- Mode Badge -->
-            <span id="mode-badge" class="px-3 py-1 bg-surface-container-high text-outline font-label-caps text-label-caps rounded-full hidden"></span>
-            <button id="dictionary-btn" class="px-gap-md py-gap-sm bg-surface-container-high text-primary rounded-xl font-label-caps text-label-caps hover:bg-primary-container/20 transition-all flex items-center gap-1" title="Look up a word">
-              <span class="material-symbols-outlined text-sm">menu_book</span>
-              Dictionary
-            </button>
-          </div>
-        </div>
-
-        <!-- Timer Bar (only visible for turns_timed mode) -->
-        <div id="timer-container" class="hidden bg-surface-container-high rounded-2xl p-gap-md overflow-hidden">
-          <div class="flex items-center justify-between mb-2">
-            <span class="font-label-caps text-label-caps text-outline uppercase">Your Turn</span>
-            <span id="timer-display" class="font-headline-sm text-headline-sm font-bold">60s</span>
-          </div>
-          <div class="w-full h-2 bg-surface-container-highest rounded-full overflow-hidden">
-            <div id="timer-bar" class="h-full bg-primary rounded-full transition-all duration-1000 ease-linear" style="width: 100%"></div>
-          </div>
-        </div>
-
-        <!-- Turn Indicator - hidden for free_for_all mode -->
-        <div id="turn-indicator" class="flex items-center gap-gap-md p-gap-md bg-surface-container-lowest border border-outline-variant rounded-xl">
-          <div id="turn-dot" class="w-3 h-3 rounded-full bg-secondary animate-pulse"></div>
-          <div>
-            <p id="turn-text" class="font-body-md text-body-md">Waiting for session to start...</p>
-            <p id="required-letter-display" class="font-label-caps text-label-caps text-outline hidden">Next word must start with: <span id="required-letter" class="font-bold text-primary text-lg"></span></p>
-          </div>
-        </div>
-
-        <!-- Progress Board -->
-        <div class="bg-surface-container-lowest border border-outline-variant rounded-2xl overflow-hidden">
-          <div class="px-gap-lg py-gap-md bg-primary-container/10">
-            <h3 class="font-headline-sm text-headline-sm flex items-center gap-2">
+      <!-- Game content (hidden until loaded) -->
+      <div id="play-content" class="hidden space-y-4">
+        <!-- Scoreboard -->
+        <div id="scoreboard" class="glass-card p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="font-heading text-heading-sm text-dark-text flex items-center gap-2">
               <span class="material-symbols-outlined text-primary" style="font-variation-settings:'FILL'1">leaderboard</span>
-              Progress Board
+              Scoreboard
             </h3>
+            <span id="mode-badge" class="px-2.5 py-1 rounded-lg bg-primary/10 text-primary text-label-sm"></span>
           </div>
-          <div id="scoreboard" class="p-gap-lg space-y-gap-sm">
-            <!-- Score items rendered here -->
+          <div id="scoreboard-list" class="space-y-1.5">
+            <!-- Rendered by JS -->
           </div>
         </div>
 
-        <!-- Word Input & Submit - always visible for free_for_all; shown/hidden for turn modes -->
-        <div id="word-input-area" class="hidden bg-surface-container-lowest border border-outline-variant rounded-2xl p-gap-lg">
-          <label class="font-label-caps text-label-caps text-outline mb-2 block" for="word-input">YOUR WORD</label>
-          <div class="flex flex-col sm:flex-row gap-gap-md">
-            <div class="flex-1 relative">
-              <span id="input-letter-prefix" class="absolute left-4 top-1/2 -translate-y-1/2 font-headline-md text-headline-md text-primary font-bold hidden"></span>
-              <input id="word-input" type="text" autocomplete="off" autocorrect="off" spellcheck="false"
-                placeholder="Type your word..."
-                class="w-full px-gap-md py-4 bg-surface-container-high border-2 border-outline-variant focus:border-primary focus:ring-0 rounded-xl font-input-text text-input-text uppercase outline-none transition-all" />
+        <!-- Combat banner (combat mode only) -->
+        <div id="combat-banner" class="hidden glass-card p-4 flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <span class="material-symbols-outlined text-warning" style="font-variation-settings:'FILL'1">diamond</span>
+            <span class="font-heading text-heading-sm text-dark-text">Combat</span>
+            <span class="text-label-sm text-dark-text-muted">wager <span id="combat-wager">0</span> 💎</span>
+          </div>
+          <div class="text-label-sm text-dark-text-muted">
+            Your gems: <span id="combat-balance" class="text-warning font-bold">0</span> 💎
+          </div>
+        </div>
+
+        <!-- Turn Indicator -->
+        <div id="turn-indicator" class="glass-card p-5 text-center">
+          <div class="flex items-center justify-center gap-4 mb-3">
+            <div class="w-16 h-16 rounded-2xl bg-primary/15 flex items-center justify-center">
+              <span id="required-letter" class="font-heading text-heading-lg font-extrabold text-primary letter-pulse">A</span>
             </div>
-            <button id="submit-word-btn" class="px-gap-lg py-4 bg-primary text-on-primary font-headline-sm text-headline-sm rounded-xl btn-shadow transition-all flex items-center justify-center gap-sm whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none" disabled>
-              <span class="material-symbols-outlined" style="font-variation-settings:'FILL'1">check_circle</span>
+          </div>
+          <p id="turn-text" class="font-heading text-heading-sm text-dark-text">Your turn!</p>
+          <p class="text-body-sm text-dark-text-muted mt-1">Enter a word starting with <span id="turn-letter" class="text-primary font-bold"></span></p>
+        </div>
+
+        <!-- Timer -->
+        <div id="timer-container" class="hidden">
+          <div class="flex items-center justify-between mb-1.5">
+            <span id="timer-label" class="text-label-sm text-dark-text-muted">Time remaining</span>
+            <span id="timer-display" class="font-heading text-heading-sm text-dark-text font-bold">60s</span>
+          </div>
+          <div class="progress-bar">
+            <div id="timer-bar" class="progress-bar-fill bg-primary" style="width: 100%"></div>
+          </div>
+        </div>
+
+        <!-- Word Input -->
+        <div id="word-input-area" class="glass-card p-4 space-y-3">
+          <div class="flex items-center gap-2">
+            <span id="input-prefix" class="font-heading text-heading-sm text-primary font-bold uppercase"></span>
+            <input id="word-input" type="text" maxlength="20" autocomplete="off"
+              class="flex-1 bg-transparent border-none outline-none text-heading-md font-heading font-bold text-dark-text uppercase placeholder-dark-text-muted/30" placeholder="Type a word..." />
+          </div>
+          <div class="flex gap-2">
+            <button id="submit-word-btn" class="flex-1 py-3.5 btn-primary text-body-md flex items-center justify-center gap-2">
+              <span class="material-symbols-outlined text-lg">check</span>
               Submit
             </button>
+            <button id="dictionary-btn" class="px-4 py-3.5 rounded-xl btn-secondary text-body-sm" title="Look up dictionary">
+              <span class="material-symbols-outlined">menu_book</span>
+            </button>
           </div>
-          <p id="word-feedback" class="font-body-md text-body-md text-on-surface-variant mt-2 hidden"></p>
+          <p id="word-feedback" class="text-body-sm text-dark-text-muted text-center min-h-[1.5rem]"></p>
         </div>
 
-        <!-- Word Chain Display -->
-        <div class="bg-surface-container-lowest border border-outline-variant rounded-2xl p-gap-lg">
-          <div class="flex items-center justify-between mb-gap-md">
-            <h3 class="font-headline-sm text-headline-sm flex items-center gap-2">
+        <!-- Word Chain -->
+        <div class="glass-card p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="font-heading text-heading-sm text-dark-text flex items-center gap-2">
               <span class="material-symbols-outlined text-primary" style="font-variation-settings:'FILL'1">link</span>
               Word Chain
             </h3>
-            <span id="chain-count" class="font-label-caps text-label-caps text-outline">0 words</span>
+            <span id="chain-count" class="text-label-sm text-dark-text-muted">0 words</span>
           </div>
-          <div id="chain-container" class="max-h-[400px] overflow-y-auto word-chain-scroll">
-            <div id="chain-empty" class="text-center py-8">
-              <span class="material-symbols-outlined text-4xl text-outline mb-2">empty_dashboard</span>
-              <p class="font-body-md text-body-md text-on-surface-variant">No words yet. Be the first to contribute!</p>
-            </div>
-            <div id="chain-list" class="space-y-gap-sm hidden">
-              <!-- Chain items rendered here in reverse order (newest first) -->
-            </div>
+          <div id="chain-list" class="space-y-1.5 max-h-[300px] overflow-y-auto pr-1">
+            <p class="text-body-sm text-dark-text-muted text-center py-8">No words yet. Start the chain!</p>
           </div>
         </div>
 
-        <!-- Solo Mode specific -->
-        <div id="solo-controls" class="hidden">
-          <button id="new-solo-game-btn" class="w-full py-4 bg-secondary text-on-secondary font-headline-sm text-headline-sm rounded-xl btn-tactile transition-all flex items-center justify-center gap-md">
-            <span class="material-symbols-outlined" style="font-variation-settings:'FILL'1">refresh</span>
-            New Practice Session
-          </button>
-        </div>
-
-        <!-- Leave -->
-        <button id="leave-game-btn" class="w-full py-3 text-outline font-label-caps text-label-caps hover:text-error transition-colors">
-          Leave Session
+        <!-- Leave button -->
+        <button id="leave-game-btn" class="w-full py-3 text-body-sm text-dark-text-muted hover:text-error transition-colors">
+          Leave Game
         </button>
       </div>
     </div>
   `;
 
-  // --- State ---
-  let currentGameId = gameId;
+  let currentGameId = null;
   let myUserId = null;
   let myProfile = null;
   let group = null;
   let words = [];
   let isMyTurn = false;
   let unsubscribe = null;
+  let cleanupPoll = null;
   let gameActive = false;
   let currentLetter = null;
   let botTimer = null;
-  let gameMode = 'turns_timed'; // 'turns_timed' | 'turns_relaxed' | 'free_for_all'
+  let rules = {};
+  let gameMode = 'turns_timed';
 
   try {
-    const user = await ensureAuth();
+    const user = await getCurrentUser();
     if (!user) throw new Error('Not authenticated');
+
     myUserId = user.id;
     myProfile = store.get('profile');
 
@@ -174,292 +147,375 @@ export default async function PlayView(container, params) {
     } else {
       await initMultiplayerMode();
     }
-  } catch (error) {
+
     container.querySelector('#play-loading').classList.add('hidden');
-    container.querySelector('#play-content').classList.add('hidden');
-    container.innerHTML = `
-      <div class="text-center py-20">
-        <span class="material-symbols-outlined text-6xl text-error mb-4">error</span>
-        <p class="font-body-md text-body-md">${error.message}</p>
-        <button onclick="window.location.hash='#/'"
-          class="mt-4 px-6 py-3 bg-primary text-on-primary rounded-xl btn-shadow">Go Home</button>
+    container.querySelector('#play-content').classList.remove('hidden');
+
+  } catch (error) {
+    container.querySelector('#play-loading').innerHTML = `
+      <div class="w-16 h-16 rounded-2xl bg-error-container flex items-center justify-center mx-auto mb-4">
+        <span class="material-symbols-outlined text-3xl text-error">error</span>
       </div>
+      <p class="text-body-md text-dark-text-muted">${error.message}</p>
+      <button onclick="window.location.hash='#/'" class="mt-6 px-8 py-3.5 btn-primary text-body-md">Go Home</button>
     `;
   }
 
-  // =========================================================
-  // SOLO MODE
-  // =========================================================
+  // ====== SOLO MODE ======
+
   function initSoloMode() {
-    container.querySelector('#game-title').textContent = 'Solo Practice';
-    container.querySelector('#game-subtitle').textContent = 'Practice with the word bot';
-    container.querySelector('#solo-controls').classList.remove('hidden');
+    gameActive = true;
+    currentGameId = 'solo';
+    gameMode = 'turns_timed';
 
     group = {
       id: 'solo',
       name: 'Solo Practice',
+      code: 'solo',
       status: 'active',
-      current_turn_player_id: myUserId,
+      game_mode: 'turns_timed',
       current_letter: null,
+      current_turn_player_id: 'player',
+      members: [
+        { player_id: 'player', profiles: { display_name: 'You', avatar_url: null }, turn_position: 1, score: 0 },
+        { player_id: 'bot', profiles: { display_name: 'WordBot', avatar_url: null }, turn_position: 2, score: 0 },
+      ],
     };
-
-    updateSoloScoreboard({ player: 0, bot: 0 });
-
-    container.querySelector('#play-loading').classList.add('hidden');
-    container.querySelector('#play-content').classList.remove('hidden');
-
-    gameActive = true;
+    words = [];
     isMyTurn = true;
     currentLetter = null;
-    showWordInput();
+
+    updateSoloScoreboard();
     updateTurnIndicator();
-
-    botTimer = null;
-
-    setupWordInput();
-    setupLeaveButton();
-    setupDictionaryButton();
-    setupNewSoloGame();
+    renderChain();
+    enableGameControls();
   }
 
-  function updateSoloScoreboard(scores) {
-    const board = container.querySelector('#scoreboard');
+  function updateSoloScoreboard() {
+    const board = container.querySelector('#scoreboard-list');
+    const playerScore = (words.filter(w => w.player_id === 'player').reduce((s, w) => s + (w.points || 0), 0));
+    const botScore = (words.filter(w => w.player_id === 'bot').reduce((s, w) => s + (w.points || 0), 0));
+
     board.innerHTML = `
-      <div class="flex items-center justify-between p-gap-md bg-surface-container rounded-xl">
-        <div class="flex items-center gap-gap-md">
-          <div class="w-10 h-10 rounded-full bg-primary flex items-center justify-center text-on-primary font-bold">
-            <span class="material-symbols-outlined">person</span>
-          </div>
-          <div>
-            <p class="font-headline-sm text-headline-sm">${myProfile?.display_name || 'You'}</p>
-            <p class="font-label-caps text-label-caps text-outline">Student</p>
-          </div>
+      <div class="flex items-center justify-between p-2.5 rounded-lg bg-glass ${isMyTurn ? 'border border-primary/20' : ''}">
+        <div class="flex items-center gap-2.5">
+          <div class="w-8 h-8 rounded-lg bg-primary/15 flex items-center justify-center text-body-sm font-bold text-primary">YO</div>
+          <span class="font-heading text-heading-sm text-dark-text">You</span>
         </div>
-        <span class="font-headline-md text-headline-md font-bold text-primary">${scores.player}</span>
+        <span class="font-heading text-heading-sm text-dark-text font-bold">${playerScore}</span>
       </div>
-      <div class="flex items-center justify-between p-gap-md bg-surface-container rounded-xl">
-        <div class="flex items-center gap-gap-md">
-          <div class="w-10 h-10 rounded-full bg-tertiary flex items-center justify-center text-on-tertiary font-bold">
-            <span class="material-symbols-outlined">smart_toy</span>
-          </div>
-          <div>
-            <p class="font-headline-sm text-headline-sm">Word Bot</p>
-            <p class="font-label-caps text-label-caps text-outline">Practice Partner</p>
-          </div>
+      <div class="flex items-center justify-between p-2.5 rounded-lg bg-glass ${!isMyTurn ? 'border border-accent/20' : ''}">
+        <div class="flex items-center gap-2.5">
+          <div class="w-8 h-8 rounded-lg bg-accent/15 flex items-center justify-center text-body-sm font-bold text-accent">WB</div>
+          <span class="font-heading text-heading-sm text-dark-text">WordBot</span>
         </div>
-        <span class="font-headline-md text-headline-md font-bold text-tertiary">${scores.bot}</span>
+        <span class="font-heading text-heading-sm text-dark-text font-bold">${botScore}</span>
       </div>
     `;
   }
 
-  function botPlay(lastLetter) {
+  function botPlay() {
     if (!gameActive) return;
 
-    isMyTurn = false;
-    hideWordInput();
-    showTimer(false);
+    let botWord = null;
+    const startLetter = currentLetter || 'A';
 
-    botTimer = setTimeout(() => {
-      if (!gameActive) return;
+    // Find a valid word
+    const usedWords = new Set(words.map(w => w.word.toLowerCase()));
+    const candidates = getWordsStartingWith(startLetter);
+    const available = candidates.filter(w => !usedWords.has(w.toLowerCase()));
 
-      let botWord = '';
+    if (available.length > 0) {
+      botWord = available[0];
+    } else {
+      // Fallback
+      const fallback = ['ACE', 'ARC', 'ART', 'APE', 'ARE', 'AGE', 'AXE', 'ADD', 'ALL', 'AND',
+        'BED', 'BIG', 'BOX', 'BUS', 'BAT', 'BAG', 'BALL', 'BAND', 'BANK', 'BELL',
+        'CAR', 'CAT', 'CUP', 'CUT', 'CALL', 'CARD', 'CARE', 'CASE', 'CASH', 'CAST',
+        'DAY', 'DIG', 'DOG', 'DOT', 'DARK', 'DASH', 'DATA', 'DATE', 'DAWN', 'DEAL',
+        'EAT', 'EGG', 'END', 'EACH', 'EARN', 'EASE', 'EAST', 'EASY', 'EDGE', 'ELSE',
+        'FAR', 'FIT', 'FUN', 'FACT', 'FALL', 'FAME', 'FARM', 'FAST', 'FEAR', 'FILE',
+        'GAP', 'GET', 'GUN', 'GAME', 'GARDEN', 'GATE', 'GIFT', 'GIRL', 'GOAL', 'GOLD',
+        'HAT', 'HIT', 'HOT', 'HALL', 'HAND', 'HARD', 'HARM', 'HATE', 'HAVE', 'HEAD',
+        'ICE', 'INK', 'INN', 'ITEM', 'IDEA', 'IMAGE', 'INCH', 'INFO', 'IRON', 'ISLE',
+        'JAM', 'JET', 'JOB', 'JAR', 'JAW', 'JAZZ', 'JEEP', 'JOKE', 'JUMP', 'JURY',
+        'KEY', 'KID', 'KIT', 'KICK', 'KIND', 'KING', 'KISS', 'KNEE', 'KNIT', 'KNOB',
+        'LAP', 'LEG', 'LIP', 'LAB', 'LADY', 'LAKE', 'LAND', 'LARK', 'LASH', 'LASS',
+        'MAP', 'MAT', 'MIX', 'MAD', 'MAN', 'MAY', 'MENU', 'MILD', 'MILK', 'MIND',
+        'NAP', 'NET', 'NUT', 'NAIL', 'NAME', 'NAVY', 'NEAR', 'NEAT', 'NECK', 'NEED',
+        'OAK', 'OAR', 'OWL', 'OWN', 'ODOR', 'OIL', 'ONLY', 'OPEN', 'ORAL', 'OURS',
+        'PAD', 'PAN', 'PEN', 'POT', 'PACK', 'PAGE', 'PAID', 'PAIN', 'PAIR', 'PALE', 'PALM',
+        'RAD', 'RAG', 'RAM', 'RAN', 'RAP', 'RAT', 'RAW', 'RAY', 'RED', 'RIG', 'RIM', 'ROB', 'ROD', 'ROW', 'RUB', 'RUG', 'RUN', 'RUSH',
+        'SAD', 'SAG', 'SAP', 'SAT', 'SAW', 'SAY', 'SET', 'SIT', 'SIX', 'SKI', 'SKY', 'SLAM', 'SLAP', 'SLIM', 'SLIP', 'SLOT', 'SLOW',
+        'TAG', 'TAN', 'TAP', 'TEN', 'TIE', 'TIN', 'TIP', 'TOE', 'TON', 'TOP', 'TOW', 'TOY', 'TUB', 'TUG', 'TWO',
+        'URN', 'USE', 'USED', 'USER', 'USUAL', 'UTTER',
+        'VAN', 'VAT', 'VET', 'VOW', 'VAIN', 'VALE', 'VANE', 'VARY', 'VAST', 'VEIL', 'VEIN', 'VENT', 'VERB', 'VERY', 'VEST', 'VETO', 'VICE', 'VIEW', 'VINE', 'VOID',
+        'WAD', 'WAG', 'WAR', 'WAX', 'WAY', 'WEB', 'WED', 'WET', 'WIG', 'WIN', 'WIT', 'WOE', 'WOK', 'WON', 'WOO', 'WOW',
+        'YAK', 'YAM', 'YAP', 'YAW', 'YEA', 'YES', 'YET', 'YEW', 'YIN', 'YOU', 'YOUR',
+        'ZAP', 'ZEN', 'ZIP', 'ZIT', 'ZOO', 'ZOOM',
+        'BOOK', 'COOK', 'DOOR', 'FOOD', 'GOOD', 'HOOD', 'LOOK', 'MOON', 'NOON', 'ROOM', 'SOON', 'TOOK', 'WOOD', 'WOOL',
+        'BEEN', 'DEEN', 'FEED', 'NEED', 'SEED', 'WEED',
+        'BALL', 'CALL', 'FALL', 'HALL', 'MALL', 'TALL', 'WALL',
+        'BELL', 'CELL', 'DELL', 'FELL', 'HELL', 'SELL', 'TELL', 'WELL',
+        'BORN', 'CORN', 'HORN', 'LORN', 'TORN', 'WORN',
+        'BURN', 'TURN',
+        'BIRD', 'CORD', 'FORD', 'WORD',
+        'CARD', 'HARD', 'YARD',
+        'BAND', 'HAND', 'LAND', 'SAND',
+        'BEND', 'LEND', 'SEND', 'TEND',
+        'BOND', 'FOND', 'POND',
+        'BARK', 'DARK', 'MARK', 'PARK',
+        'BACK', 'PACK', 'RACK', 'SACK', 'TACK',
+        'BEAK', 'LEAK', 'PEAK', 'WEAK',
+        'BEAT', 'FEAT', 'HEAT', 'MEAT', 'NEAT', 'SEAT',
+        'BELT', 'FELT', 'MELT',
+        'BEST', 'NEST', 'REST', 'TEST', 'VEST', 'WEST',
+        'BITE', 'KITE', 'MITE', 'NITE', 'SITE',
+        'BLUE', 'CLUE', 'FLUE', 'GLUE', 'SLUE',
+        'BOLD', 'COLD', 'FOLD', 'GOLD', 'HOLD', 'MOLD', 'SOLD', 'TOLD',
+        'BOLT', 'COLT', 'MELT', 'BELT',
+        'BOMB', 'COMB', 'TOMB',
+        'BONE', 'CONE', 'GONE', 'LONE', 'TONE', 'ZONE',
+        'BORE', 'CORE', 'MORE', 'PORE', 'SORE', 'TORE', 'WORE',
+        'BORN', 'CORN', 'HORN', 'TORN', 'WORN',
+        'BOSS', 'LOSS', 'MOSS', 'TOSS',
+        'BOWL', 'COWL', 'HOWL', 'OWL',
+        'BULB', 'CURB',
+        'BULK', 'HULK', 'SILK',
+        'BUMP', 'DUMP', 'JUMP', 'LUMP', 'PUMP',
+        'BUNCH', 'LUNCH', 'MUNCH', 'PUNCH',
+        'CAGE', 'PAGE', 'RAGE', 'SAGE', 'WAGE',
+        'CAKE', 'BAKE', 'LAKE', 'MAKE', 'RAKE', 'TAKE', 'WAKE',
+        'CAME', 'FAME', 'GAME', 'LAME', 'NAME', 'SAME', 'TAME',
+        'CANE', 'LANE', 'MANE', 'VANE', 'WANE',
+        'CARE', 'DARE', 'FARE', 'HARE', 'MARE', 'PARE', 'RARE', 'WARE',
+        'CART', 'DART', 'FART', 'PART', 'TART',
+        'CASE', 'BASE', 'EASE', 'VASE',
+        'CASH', 'DASH', 'HASH', 'LASH', 'MASH', 'RASH', 'SASH',
+        'CASK', 'MASK', 'TASK',
+        'CAST', 'FAST', 'LAST', 'MAST', 'PAST', 'VAST',
+        'CAVE', 'GAVE', 'HAVE', 'PAVE', 'RAVE', 'SAVE', 'WAVE',
+        'CHAT', 'THAT', 'WHAT',
+        'CHEF', 'THEIR',
+        'CHIN', 'THIN', 'WHEN', 'WHIN',
+        'CHIP', 'SHIP', 'WHIP',
+        'CLAD', 'GLAD',
+        'CLAN', 'PLAN', 'THAN',
+        'CLAP', 'FLAP', 'SLAP',
+        'CLAY', 'PLAY', 'SLAY',
+        'CLIP', 'FLIP', 'SLIP',
+        'CLUB', 'FLUB',
+        'COAL', 'GOAL', 'SOAL',
+        'COAT', 'GOAT', 'MOAT',
+        'CODE', 'MODE', 'RODE',
+        'COIL', 'FOIL', 'OIL', 'SOIL', 'TOIL',
+        'COIN', 'JOIN', 'LOIN',
+        'COLD', 'FOLD', 'GOLD', 'HOLD', 'MOLD', 'SOLD', 'TOLD',
+        'COLT', 'BOLT', 'MELT',
+        'COME', 'HOME', 'SOME',
+        'COOK', 'BOOK', 'HOOK', 'LOOK', 'TOOK',
+        'COOL', 'FOOL', 'POOL', 'TOOL', 'WOOL',
+        'COOP', 'HOOP', 'LOOP',
+        'COPE', 'HOPE', 'POPE', 'ROPE',
+        'CORD', 'FORD', 'LORD', 'WORD',
+        'CORE', 'BORE', 'GORE', 'MORE', 'PORE', 'SORE', 'TORE', 'WORE',
+        'CORK', 'FORK', 'PORK', 'WORK',
+        'CORN', 'BORN', 'HORN', 'TORN', 'WORN',
+        'COST', 'LOST', 'MOST', 'POST',
+        'COTE', 'NOTE', 'VOTE', 'WOTE',
+        'COUCH', 'POUCH', 'TOUCH',
+        'COULD', 'MOULD', 'WOULD',
+        'COUNT', 'MOUNT',
+        'COURT', 'FOURTH',
+        'COVE', 'LOVE', 'MOVE', 'ROVE',
+        'COWL', 'BOWL', 'HOWL',
+        'CRAB', 'GRAB', 'SLAB',
+        'CRACK', 'TRACK',
+        'CRAFT', 'DRAFT', 'GRAFT', 'SHAFT',
+        'CRAG', 'DRAG', 'FLAG', 'SNAG',
+        'CRANE', 'MANE', 'LANE', 'CANE', 'PLANE',
+        'CRANK', 'FRANK', 'PRANK', 'TRANK',
+        'CRASH', 'TRASH',
+        'CRATE', 'PLATE', 'SKATE', 'SLATE',
+        'CRAVE', 'BRAVE', 'GRAVE', 'SHAVE', 'SLAVE',
+        'CRAWL', 'BRAWL', 'DRAWL', 'SCRAWL',
+        'CRAZY', 'LAZY',
+        'CREAK', 'BREAK', 'FREAK', 'LEAK', 'PEAK', 'WEAK',
+        'CREAM', 'DREAM', 'SCREAM', 'STREAM',
+        'CREST', 'FEST', 'NEST', 'PEST', 'REST', 'TEST', 'VEST', 'WEST',
+        'CRIB', 'BRIB',
+        'CRIME', 'DIME', 'LIME', 'MIME', 'RIME', 'TIME',
+        'CRISP', 'LISP',
+        'CROAK', 'SOAK',
+        'CROWD', 'BROWD',
+        'CROWN', 'BROWN', 'DROWN', 'FROWN',
+        'CRUDE', 'RUDE',
+        'CRUEL', 'FUEL',
+        'CRUMB', 'THUMB',
+        'CRUSH', 'BRUSH', 'FLUSH', 'PLUSH', 'SLUSH',
+        'CRUST', 'DUST', 'JUST', 'LUST', 'MUST', 'RUST',
+        'CRYPT', 'SCRIPT',
+        'CUBE', 'TUBE',
+        'CULT', 'FULT',
+        'CURB', 'URBAN',
+        'CURD', 'TURD',
+        'CURE', 'LURE', 'PURE', 'SURE',
+        'CURL', 'FURL', 'HURL',
+        'CURSE', 'NURSE', 'PURSE',
+        'CURVE', 'NERVE',
+        'CUSHION', 'RUSH',
+        'CUSTODY', 'CUSTOM',
+        'CYCLE', 'BICYCLE'];
 
-      if (lastLetter) {
-        const candidates = getWordsStartingWith(lastLetter);
-        const used = new Set(words.map(w => w.word.toLowerCase()));
-        const available = candidates.filter(w => !used.has(w.toLowerCase()));
-        if (available.length > 0) {
-          botWord = available[Math.floor(Math.random() * available.length)];
-        } else {
-          botWord = '';
-        }
-      } else {
-        const candidates = ['cat', 'dog', 'sun', 'run', 'big', 'red', 'hat', 'pen', 'cup', 'bed'];
-        botWord = candidates[Math.floor(Math.random() * candidates.length)];
+      // Pick from fallback
+      const fallbackAvailable = fallback.filter(w => w[0].toLowerCase() === startLetter.toLowerCase() && !usedWords.has(w.toLowerCase()));
+      if (fallbackAvailable.length > 0) {
+        botWord = fallbackAvailable[0];
       }
+    }
 
-      if (botWord) {
-        const wordUpper = botWord.toUpperCase();
-        const points = calculateScore(botWord, true);
-        addWordToChain({
-          word: wordUpper,
-          points,
-          player_name: 'Word Bot',
-          is_bot: true,
-          created_at: new Date().toISOString(),
-        });
+    if (botWord) {
+      const points = calculateScore(botWord);
 
-        currentLetter = getLastLetter(wordUpper);
-        isMyTurn = true;
-        showWordInput();
-        updateTurnIndicator();
-        startTurnTimer(60);
+      words.push({
+        id: 'bot-' + Date.now(),
+        word: botWord,
+        word_lower: botWord.toLowerCase(),
+        player_id: 'bot',
+        points: points,
+        created_at: new Date().toISOString(),
+        is_bot: true,
+        profiles: { display_name: 'WordBot' },
+      });
 
-        updateChainCount();
-      } else {
-        addWordToChain({
-          word: '🤖 Bot gave up!',
-          points: 0,
-          player_name: 'Word Bot',
-          is_bot: true,
-          is_message: true,
-          created_at: new Date().toISOString(),
-        });
-        gameActive = false;
-        showToast('success', 'You win! The bot couldn\'t find a word.');
-        disableGameControls();
-      }
+      currentLetter = getLastLetter(botWord);
+      isMyTurn = true;
+      gameActive = true;
 
-      updateChainCount();
-    }, 1500 + Math.random() * 2000);
+      updateSoloScoreboard();
+      updateTurnIndicator();
+      renderChain();
+      enableGameControls();
+      showWordFeedback(`WordBot played "${botWord}" (+${points})`);
+    } else {
+      // Bot couldn't find a word, player wins!
+      showWordFeedback('WordBot couldn\'t find a word! You win! 🎉');
+      gameActive = false;
+      disableGameControls();
+    }
   }
 
   function setupNewSoloGame() {
-    container.querySelector('#new-solo-game-btn').addEventListener('click', () => {
-      stopTimer();
-      words = [];
-      gameActive = true;
-      currentLetter = null;
-      isMyTurn = true;
-      updateSoloScoreboard({ player: 0, bot: 0 });
-
-      container.querySelector('#chain-list').innerHTML = '';
-      container.querySelector('#chain-list').classList.add('hidden');
-      container.querySelector('#chain-empty').classList.remove('hidden');
-      updateChainCount();
-
-      container.querySelector('#word-input').value = '';
-      container.querySelector('#word-feedback').classList.add('hidden');
-
-      showWordInput();
-      updateTurnIndicator();
-      showTimer(false);
-
-      if (botTimer) {
-        clearTimeout(botTimer);
-        botTimer = null;
-      }
-
-      showToast('success', 'New practice session started!');
-    });
+    words = [];
+    currentLetter = null;
+    isMyTurn = true;
+    gameActive = true;
+    updateSoloScoreboard();
+    updateTurnIndicator();
+    renderChain();
+    enableGameControls();
   }
 
-  // =========================================================
-  // MULTIPLAYER MODE
-  // =========================================================
+  // ====== MULTIPLAYER MODE ======
+
   async function initMultiplayerMode() {
-    try {
-      group = await getGroupWithMembers(currentGameId);
-    } catch (e) {
-      throw new Error('Could not load study session data. It may have ended.');
-    }
+    const { getGroupWithMembers } = await import('../supabase.js');
+    group = await getGroupWithMembers(gameId);
 
-    if (!group) throw new Error('Study session not found.');
+    if (!group) throw new Error('Game not found');
 
-    // Set game mode from the group data
+    currentGameId = group.id;
     gameMode = group.game_mode || 'turns_timed';
+    gameActive = group.status === 'active';
+    currentLetter = group.current_letter || null;
 
-    container.querySelector('#game-title').textContent = group.name || 'Study Session';
-    container.querySelector('#game-subtitle').textContent = `Code: ${group.code || ''} · ${MODE_LABELS[gameMode]?.label || 'Study'}`;
+    // Parse host-configured rules into a structured object
+    const csv = (s) => (s ? String(s).split(',').map(x => x.trim().toLowerCase()).filter(Boolean) : []);
+    rules = {
+      winScore: group.win_score || 0,
+      deadMode: !!group.dead_mode,
+      bannedVowels: csv(group.banned_vowels),
+      minLength: group.min_length || 2,
+      bannedSuffixes: csv(group.banned_suffixes),
+      allowedPos: csv(group.allowed_pos),
+      combatMode: !!group.combat_mode,
+      gemWager: group.gem_wager || 0,
+    };
 
-    // Show mode badge
+    // Set mode badge
     const modeBadge = container.querySelector('#mode-badge');
-    if (modeBadge) {
-      modeBadge.textContent = MODE_LABELS[gameMode]?.label || 'Study';
-      modeBadge.classList.remove('hidden');
-      // Style based on mode
-      if (gameMode === 'free_for_all') {
-        modeBadge.className = 'px-3 py-1 bg-secondary-container/20 text-secondary font-label-caps text-label-caps rounded-full';
-      } else if (gameMode === 'turns_relaxed') {
-        modeBadge.className = 'px-3 py-1 bg-tertiary-container/20 text-tertiary font-label-caps text-label-caps rounded-full';
-      } else {
-        modeBadge.className = 'px-3 py-1 bg-surface-container-high text-outline font-label-caps text-label-caps rounded-full';
-      }
+    const modeInfo = MODE_LABELS[gameMode] || MODE_LABELS.turns_timed;
+    modeBadge.textContent = modeInfo.label;
+
+    // Combat banner (combat mode only)
+    if (rules.combatMode) {
+      const combatBanner = container.querySelector('#combat-banner');
+      const combatWager = container.querySelector('#combat-wager');
+      const combatBalance = container.querySelector('#combat-balance');
+      if (combatBanner) combatBanner.classList.remove('hidden');
+      if (combatWager) combatWager.textContent = rules.gemWager || 0;
+      if (combatBalance) combatBalance.textContent = myProfile?.gems || 0;
     }
 
-    // For free_for_all and turns_relaxed: always show input
-    // The DB trigger enforces turn order regardless — non-turn players
-    // get a friendly error if they try to submit. But the box is always
-    // visible so players in an async session can see it when they open the page.
-    if (gameMode === 'free_for_all' || gameMode === 'turns_relaxed') {
-      showWordInput();
-      if (gameMode === 'free_for_all') {
-        container.querySelector('#turn-indicator').classList.add('hidden');
-      }
+    // Load words
+    words = await getGameWords(gameId);
+
+    // Check if it's my turn
+    checkTurn();
+
+    // Render initial state
+    renderScoreboard();
+    updateTurnIndicator();
+    renderChain();
+
+    if (isMyTurn) {
+      enableGameControls();
+      if (gameMode === 'turns_timed') startTurnTimer();
     }
 
-    renderScoreboard(group.members || []);
+    // Initial authoritative sync (handles the case where it's already our turn)
 
-    try {
-      words = await getGameWords(currentGameId);
-      renderChain(words);
-    } catch (e) {
-      console.warn('Could not load words:', e.message);
-    }
-
-    container.querySelector('#play-loading').classList.add('hidden');
-    container.querySelector('#play-content').classList.remove('hidden');
-
-    if (group.status === 'active') {
-      gameActive = true;
-      checkTurn();
-    } else if (group.status === 'waiting') {
-      gameActive = false;
-      container.querySelector('#turn-text').textContent = '⏳ Waiting for host to start the session...';
-    } else if (group.status === 'finished') {
-      gameActive = false;
-      container.querySelector('#turn-text').textContent = 'Session completed!';
-      disableGameControls();
-    }
-
-    setupWordInput();
-    setupLeaveButton();
-    setupDictionaryButton();
-
-    unsubscribe = await subscribeToGame(currentGameId, {
+    // Subscribe to realtime
+    unsubscribe = await subscribeToGame(gameId, {
       onWordInserted: (newWord) => {
-        getGameWords(currentGameId).then(updatedWords => {
-          words = updatedWords;
-          renderChain(updatedWords);
-
-          if (newWord.player_id !== myUserId) {
-            currentLetter = getLastLetter(newWord.word);
-          }
-          checkTurn();
-        }).catch(() => {});
-
-        updateChainCount();
+        // Fetch full word data with profile
+        getGameWords(gameId).then(allWords => {
+          words = allWords;
+          renderChain();
+          renderScoreboard();
+          syncTurnState();
+        });
       },
       onGroupUpdated: (updatedGroup) => {
-        group = { ...group, ...updatedGroup };
-
-        if (updatedGroup.status === 'active' && !gameActive) {
-          gameActive = true;
-          showToast('success', 'Session started!');
-          checkTurn();
-        }
-
         if (updatedGroup.status === 'finished') {
           gameActive = false;
-          showToast('info', 'Session ended.');
           disableGameControls();
-          container.querySelector('#turn-text').textContent = '📚 Session Complete!';
+          stopTimer();
+          renderScoreboard();
           updateTurnIndicator();
+          // Show combat gem delta if applicable
+          if (rules.combatMode) {
+            showCombatResult();
+          } else {
+            showWordFeedback('Game ended!');
+          }
+          return;
         }
-
+        if (updatedGroup.current_letter) {
+          currentLetter = updatedGroup.current_letter;
+        }
         if (updatedGroup.current_turn_player_id) {
           group.current_turn_player_id = updatedGroup.current_turn_player_id;
-          if (updatedGroup.current_letter) {
-            currentLetter = updatedGroup.current_letter;
-          }
-          checkTurn();
         }
+        // Always re-sync UI from authoritative DB state
+        syncTurnState();
       },
-      onMembersChanged: () => {
-        getGroupWithMembers(currentGameId).then(updated => {
-          group = updated;
-          renderScoreboard(updated.members || []);
-        }).catch(() => {});
+      onMembersChanged: async () => {
+        const { getGroupWithMembers } = await import('../supabase.js');
+        const updated = await getGroupWithMembers(gameId);
+        group.members = updated.members;
+        renderScoreboard();
+        syncTurnState();
       },
       onStatus: (status) => {
         if (status === 'SUBSCRIBED') {
@@ -467,94 +523,100 @@ export default async function PlayView(container, params) {
         }
       }
     });
+
+    // Poll fallback: self-heal if a realtime event is missed/delayed.
+    // This guarantees the turn eventually reaches the correct player even if
+    // the realtime 'groups' UPDATE event is dropped.
+    const turnPoll = setInterval(async () => {
+      if (!gameActive) return;
+      try {
+        const { getGroupWithMembers } = await import('../supabase.js');
+        const fresh = await getGroupWithMembers(gameId);
+        if (fresh?.current_turn_player_id && fresh.current_turn_player_id !== group.current_turn_player_id) {
+          group.current_turn_player_id = fresh.current_turn_player_id;
+          if (fresh.current_letter) currentLetter = fresh.current_letter;
+          syncTurnState();
+        }
+      } catch (e) { /* ignore transient poll errors */ }
+    }, 4000);
+
+    // Store poll handle for cleanup
+    cleanupPoll = turnPoll;
   }
 
   function checkTurn() {
-    if (!gameActive) return;
-
-    currentLetter = group.current_letter || null;
-    isMyTurn = group.current_turn_player_id === myUserId;
-
-    // free_for_all and turns_relaxed: input is always visible
-    // The DB trigger enforces who can actually submit.
-    if (gameMode === 'free_for_all' || gameMode === 'turns_relaxed') {
-      showTimer(false);
-      updateTurnIndicator();
+    if (!gameActive && gameMode !== 'turns_relaxed') {
+      isMyTurn = false;
       return;
     }
-
-    // turns_timed: input visible only on your turn, with timer
-    if (isMyTurn) {
-      showWordInput();
-      startTurnTimer(group.turn_seconds || 60);
-    } else {
-      hideWordInput();
-      showTimer(false);
+    if (gameMode === 'free_for_all') {
+      isMyTurn = true;
+      return;
     }
-
-    updateTurnIndicator();
+    isMyTurn = group.current_turn_player_id === myUserId;
   }
 
-  // =========================================================
-  // SHARED UI FUNCTIONS
-  // =========================================================
+  // Authoritative turn sync: recompute whose turn it is from DB state and
+  // update controls, timer, scoreboard, and turn indicator consistently.
+  function syncTurnState() {
+    checkTurn();
+    renderScoreboard();
+    updateTurnIndicator();
+    if (isMyTurn) {
+      enableGameControls();
+      if (gameMode === 'turns_timed' && gameActive) startTurnTimer();
+    } else {
+      disableGameControls();
+      stopTimer();
+    }
+  }
+
+  // ====== SHARED ======
 
   function setupWordInput() {
     const input = container.querySelector('#word-input');
     const submitBtn = container.querySelector('#submit-word-btn');
     const feedback = container.querySelector('#word-feedback');
+    const prefix = container.querySelector('#input-prefix');
 
-    input.addEventListener('input', () => {
-      const prefix = container.querySelector('#input-letter-prefix');
-      if (currentLetter) {
-        prefix.textContent = currentLetter.toUpperCase();
-        prefix.classList.remove('hidden');
-        input.style.paddingLeft = '2.5rem';
-      } else {
-        prefix.classList.add('hidden');
-        input.style.paddingLeft = '';
-      }
+    if (!input || !submitBtn) return;
 
-      feedback.classList.add('hidden');
-      submitBtn.disabled = input.value.trim().length < 2;
-    });
+    // Clear prefix for first word
+    if (!currentLetter) {
+      prefix.textContent = '';
+      input.placeholder = 'Type any word to start...';
+    } else {
+      prefix.textContent = currentLetter.toUpperCase();
+      input.placeholder = 'Type a word...';
+    }
 
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        submitBtn.click();
-      }
-    });
-
-    submitBtn.addEventListener('click', async () => {
+    submitBtn.onclick = async () => {
       const word = input.value.trim().toUpperCase();
-      if (!word || word.length < 2) {
-        showWordFeedback('Word must be at least 2 letters long.', 'error');
+      if (!word) {
+        showWordFeedback('Please enter a word.');
         return;
       }
 
-      if (hasProfanity(word)) {
-        showWordFeedback('Please keep it clean! 🙈', 'error');
+      // Validate
+      if (word.length < 2) {
+        showWordFeedback('Word must be at least 2 letters.');
         return;
-      }
-
-      if (!checkChainRule(word, currentLetter)) {
-        showWordFeedback(`Word must start with \"${currentLetter.toUpperCase()}\"!`, 'error');
-        return;
-      }
-
-      if (!isValidWord(word)) {
-        try {
-          await fetchDefinition(word);
-        } catch {
-          showWordFeedback(`\"${word}\" is not a recognized English word.`, 'error');
-          return;
-        }
       }
 
       const wordLower = word.toLowerCase();
-      const isDuplicate = words.some(w => w.word?.toLowerCase() === wordLower || w.word_lower === wordLower);
-      if (isDuplicate) {
-        showWordFeedback(`\"${word}\" has already been used!`, 'error');
+
+      // Validate against chain + host rules (pure, no DB needed)
+      const usedWords = words.map(w => w.word_lower);
+      const validation = validateWord({
+        word,
+        requiredLetter: currentLetter,
+        usedWords,
+        rules,
+        isWordValid: isValidWord,
+        hasProfanity,
+      });
+      if (!validation.ok) {
+        showWordFeedback(validation.reason);
         return;
       }
 
@@ -563,214 +625,236 @@ export default async function PlayView(container, params) {
 
       try {
         if (isSolo) {
-          const points = calculateScore(word, true);
-          addWordToChain({
-            word: word,
+          const points = calculateScore(word);
+          words.push({
+            id: 'player-' + Date.now(),
+            word,
+            word_lower: wordLower,
+            player_id: 'player',
             points,
-            player_name: myProfile?.display_name || 'You',
-            is_bot: false,
             created_at: new Date().toISOString(),
+            profiles: { display_name: 'You' },
           });
-          input.value = '';
-          feedback.classList.add('hidden');
-          updateChainCount();
 
-          const currentScores = getSoloScores();
-          currentScores.player += points;
-          updateSoloScoreboard(currentScores);
-
-          stopTimer();
           currentLetter = getLastLetter(word);
-          showTimer(false);
-          botPlay(currentLetter);
-        } else {
-          const data = await submitWord(currentGameId, word);
+          isMyTurn = false;
+          gameActive = true;
+
+          updateSoloScoreboard();
+          updateTurnIndicator();
+          renderChain();
+          showWordFeedback(`"${word}" +${points} points!`);
           input.value = '';
-          feedback.classList.add('hidden');
-          showToast('success', `\"${word}\" submitted! +${data.points || word.length - 2} pts`);
+
+          // Bot's turn
+          disableGameControls();
+          setTimeout(() => {
+            botPlay();
+          }, 1500);
+
+        } else {
+          await submitWord(currentGameId, word);
+          input.value = '';
+          showWordFeedback('Word submitted!');
+          disableGameControls();
+          stopTimer();
+
+          // Check win condition (first to N points)
+          if (rules.winScore > 0) {
+            const fresh = await getGameWords(currentGameId);
+            const memberScores = group.members.map(m => ({
+              player_id: m.player_id,
+              score: fresh.filter(w => w.player_id === m.player_id)
+                .reduce((s, w) => s + (w.points || 0), 0),
+            }));
+            if (checkWinner(memberScores, rules.winScore)) {
+              await endGame(currentGameId).catch(() => {});
+            }
+          }
         }
       } catch (error) {
-        showWordFeedback(error.message, 'error');
-      } finally {
-        submitBtn.disabled = false;
-        submitBtn.innerHTML = '<span class="material-symbols-outlined" style="font-variation-settings:\'FILL\'1">check_circle</span> Submit';
+        showWordFeedback(error.message);
       }
-    });
+
+      submitBtn.disabled = false;
+      submitBtn.innerHTML = `<span class="material-symbols-outlined text-lg">check</span> Submit`;
+    };
+
+    // Enter key
+    input.onkeydown = (e) => {
+      if (e.key === 'Enter') {
+        submitBtn.click();
+      }
+    };
   }
 
   function setupLeaveButton() {
-    container.querySelector('#leave-game-btn').addEventListener('click', () => {
-      if (confirm('Leave this study session?')) {
-        cleanup();
+    container.querySelector('#leave-game-btn').addEventListener('click', async () => {
+      if (confirm('Leave this game?')) {
+        if (!isSolo && currentGameId) {
+          // Best-effort: free the turn / end the game if needed. Fire-and-forget
+          // because the user is navigating away regardless.
+          try { await leaveGame(currentGameId); } catch (e) { /* ignore */ }
+        }
+        if (unsubscribe) unsubscribe();
         navigate('/');
       }
     });
   }
 
   function setupDictionaryButton() {
-    const dictBtn = container.querySelector('#dictionary-btn');
-    dictBtn.addEventListener('click', async () => {
-      const word = container.querySelector('#word-input').value.trim().toUpperCase();
+    container.querySelector('#dictionary-btn').addEventListener('click', () => {
+      const input = container.querySelector('#word-input');
+      const word = input.value.trim();
       if (word) {
         openDictionary(word);
       } else {
-        openDictionary('dictionary');
+        showToast('info', 'Type a word first, then tap the dictionary icon.');
       }
     });
   }
 
-  function renderScoreboard(members) {
-    const board = container.querySelector('#scoreboard');
-    if (!members || members.length === 0) {
-      board.innerHTML = '<p class="font-body-md text-body-md text-outline text-center py-4">No students yet.</p>';
-      return;
-    }
+  function renderScoreboard() {
+    const board = container.querySelector('#scoreboard-list');
+    if (!group?.members) return;
 
-    const sorted = [...members].sort((a, b) => (b.score || 0) - (a.score || 0));
+    const sorted = [...group.members].sort((a, b) => (b.score || 0) - (a.score || 0));
 
     board.innerHTML = sorted.map((m, i) => {
       const p = m.profiles || {};
       const isMe = m.player_id === myUserId;
-      const isCurrent = gameMode !== 'free_for_all' && m.player_id === group?.current_turn_player_id;
+      const isCurrent = m.player_id === group.current_turn_player_id;
       const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : '';
 
       return `
-        <div class="flex items-center justify-between p-gap-md bg-surface-container rounded-xl ${isMe ? 'ring-2 ring-primary/30' : ''} ${isCurrent ? 'animate-pulse-border' : ''}">
-          <div class="flex items-center gap-gap-md min-w-0">
-            <span class="font-headline-sm text-headline-sm text-outline w-5 flex-shrink-0">${medal || (i + 1)}</span>
-            <div class="w-9 h-9 rounded-full bg-primary flex items-center justify-center text-on-primary font-bold text-sm flex-shrink-0">
-              ${(p.display_name || 'Player ' + (i + 1)).slice(0, 2).toUpperCase()}
+        <div class="flex items-center justify-between p-2.5 rounded-lg ${isMe ? 'bg-primary/10' : 'bg-glass'} ${isCurrent && !isSolo ? 'border border-primary/20' : ''} transition-all">
+          <div class="flex items-center gap-2.5">
+            <div class="w-8 h-8 rounded-lg bg-primary/15 flex items-center justify-center text-body-sm font-bold text-primary overflow-hidden">
+              ${p.avatar_url
+                ? `<img src="${p.avatar_url}" alt="" class="w-full h-full object-cover" />`
+                : (p.display_name || '?').slice(0, 2).toUpperCase()
+              }
             </div>
-            <div class="min-w-0">
-              <p class="font-headline-sm text-headline-sm truncate">${p.display_name || 'Student ' + (i + 1)} ${isMe ? '(You)' : ''}</p>
-              <p class="font-label-caps text-label-caps text-outline">${isCurrent ? '🔵 Contributing...' : ''}</p>
+            <div>
+              <span class="font-heading text-heading-sm text-dark-text">${p.display_name || 'Player'}</span>
+              ${isMe ? '<span class="text-label-sm text-dark-text-muted ml-1">(you)</span>' : ''}
             </div>
           </div>
-          <span class="font-headline-md text-headline-md font-bold text-primary flex-shrink-0 ml-2">${m.score || 0}</span>
+          <div class="flex items-center gap-2">
+            <span class="font-heading text-heading-sm text-dark-text font-bold">${m.score || 0}</span>
+            <span class="text-label-sm text-dark-text-muted">pts</span>
+            ${medal ? `<span class="text-sm">${medal}</span>` : ''}
+          </div>
         </div>
       `;
     }).join('');
   }
 
   function getSoloScores() {
-    const scores = { player: 0, bot: 0 };
-    for (const w of words) {
-      if (w.is_bot) scores.bot += w.points || 0;
-      else scores.player += w.points || 0;
-    }
-    return scores;
+    const playerScore = words.filter(w => w.player_id === 'player').reduce((s, w) => s + (w.points || 0), 0);
+    const botScore = words.filter(w => w.player_id === 'bot').reduce((s, w) => s + (w.points || 0), 0);
+    return { player: playerScore, bot: botScore };
   }
 
-  function addWordToChain(wordData) {
-    words = [wordData, ...words];
-    renderChain(words);
-  }
+  function addWordToChain() {}
 
-  function renderChain(wordsArray) {
+  function renderChain() {
     const list = container.querySelector('#chain-list');
-    const empty = container.querySelector('#chain-empty');
+    const empty = container.querySelector('#chain-list p');
 
-    if (!wordsArray || wordsArray.length === 0) {
-      list.classList.add('hidden');
-      empty.classList.remove('hidden');
+    if (words.length === 0) {
+      list.innerHTML = '<p class="text-body-sm text-dark-text-muted text-center py-8">No words yet. Start the chain!</p>';
       return;
     }
 
-    empty.classList.add('hidden');
-    list.classList.remove('hidden');
-
-    list.innerHTML = wordsArray.map((w, idx) => {
-      const isLast = idx === 0;
-      const nextWord = idx < wordsArray.length - 1 ? wordsArray[idx + 1] : null;
-      const startLetter = nextWord ? nextWord.word[0] : '?';
-      const isBot = w.is_bot;
+    list.innerHTML = words.slice().reverse().map((w, i) => {
+      const isLast = i === 0;
+      const nextWord = !isLast ? words[words.length - i] : null;
+      const startLetter = nextWord ? nextWord.word[0].toUpperCase() : (currentLetter || '').toUpperCase();
+      const isBot = w.is_bot || w.player_id === 'bot';
       const isMessage = w.is_message;
 
       if (isMessage) {
-        return `
-          <div class="flex items-center justify-center py-2 opacity-60">
-            <span class="font-body-md text-body-md italic">${w.word}</span>
-          </div>
-        `;
+        return `<div class="text-center text-body-sm text-dark-text-muted py-2 italic">${w.word}</div>`;
       }
 
+      const playerName = w.profiles?.display_name || (isBot ? 'WordBot' : 'Player');
+
       return `
-        <div class="flex items-center gap-gap-md p-gap-md bg-surface-container rounded-xl ${isLast ? 'ring-2 ring-primary/20' : ''} ${isBot ? 'bg-tertiary-container/5' : ''}">
-          <div class="flex-shrink-0 w-8 h-8 rounded-full ${isBot ? 'bg-tertiary/20 text-tertiary' : 'bg-primary/20 text-primary'} flex items-center justify-center font-bold text-sm">
-            ${isBot ? '🤖' : '👤'}
+        <div class="flex items-center gap-3 p-2.5 rounded-xl ${isBot ? 'bg-accent/5' : 'bg-glass'} glass-hover cursor-pointer group" onclick="window.__openDict && window.__openDict('${w.word}')">
+          <div class="w-4 h-4 rounded-full ${isBot ? 'bg-accent/20' : 'bg-primary/20'} flex items-center justify-center">
+            <div class="w-2 h-2 rounded-full ${isBot ? 'bg-accent' : 'bg-primary'}"></div>
           </div>
-          <div class="flex-1 min-w-0">
-            <div class="flex items-center gap-2">
-              <span class="font-headline-sm text-headline-sm font-bold ${isLast ? 'text-primary' : ''}">${w.word}</span>
-              ${isLast ? '<span class=\"px-2 py-0.5 bg-primary text-on-primary text-[10px] font-bold uppercase rounded-full\">NEW</span>' : ''}
+          <div class="flex-1 flex items-center justify-between">
+            <div>
+              <span class="font-heading text-heading-sm font-bold ${isBot ? 'text-accent' : 'text-dark-text'}">${w.word}</span>
+              <span class="text-label-sm text-dark-text-muted ml-2">${playerName}</span>
             </div>
-            <p class="font-label-caps text-label-caps text-outline">
-              ${w.player_name || w.profiles?.display_name || 'Student'} · +${w.points || 0} pts
-              · ${formatTimeAgo(w.created_at)}
-            </p>
+            <div class="flex items-center gap-2">
+              <span class="text-label-sm text-dark-text-muted">+${w.points || 0}</span>
+              <span class="material-symbols-outlined text-sm text-dark-text-muted opacity-0 group-hover:opacity-100 transition-all">menu_book</span>
+            </div>
           </div>
-          <button class="lookup-word text-outline hover:text-primary transition-colors p-1" data-word="${w.word}">
-            <span class="material-symbols-outlined text-sm">search</span>
-          </button>
         </div>
-        ${nextWord ? `
-          <div class="flex items-center gap-2 pl-12 -mt-1 mb-1">
-            <div class="w-px h-4 bg-primary/30"></div>
-            <span class="text-xs font-bold text-primary">Must start with: ${startLetter}</span>
-          </div>
-        ` : ''}
       `;
     }).join('');
 
-    list.querySelectorAll('.lookup-word').forEach(btn => {
-      btn.addEventListener('click', () => {
-        openDictionary(btn.dataset.word);
-      });
-    });
+    updateChainCount();
+    updateTurnIndicator();
 
-    const chainContainer = container.querySelector('#chain-container');
-    chainContainer.scrollTop = 0;
+    // Wire up dictionary
+    window.__openDict = (word) => {
+      openDictionary(word);
+    };
   }
 
   function updateChainCount() {
-    container.querySelector('#chain-count').textContent = `${words.length} word${words.length !== 1 ? 's' : ''}`;
+    const count = container.querySelector('#chain-count');
+    if (count) count.textContent = `${words.length} word${words.length !== 1 ? 's' : ''}`;
   }
 
   function updateTurnIndicator() {
     const turnText = container.querySelector('#turn-text');
-    const letterDisplay = container.querySelector('#required-letter-display');
-    const requiredLetter = container.querySelector('#required-letter');
+    const letterDisplay = container.querySelector('#required-letter');
+    const turnLetter = container.querySelector('#turn-letter');
 
-    if (!gameActive) {
-      turnText.textContent = '⏸️ Session paused';
-      return;
-    }
+    if (!turnText) return;
 
-    if (gameMode === 'free_for_all') {
-      turnText.textContent = words.length > 0
-        ? '🌿 Open practice — add any word that follows the chain!'
-        : '🌿 Open practice — be the first to add a word!';
-    } else if (gameMode === 'turns_relaxed') {
-      if (isMyTurn) {
-        turnText.textContent = '🎯 Your turn — the word box is ready for you! (No pressure, take your time.)';
+    const requiredLetter = currentLetter || 'ANY';
+
+    if (letterDisplay) letterDisplay.textContent = requiredLetter === 'ANY' ? '?' : requiredLetter.toUpperCase();
+    if (turnLetter) turnLetter.textContent = requiredLetter === 'ANY' ? 'any letter' : `"${requiredLetter.toUpperCase()}"`;
+
+    if (isSolo) {
+      if (isMyTurn && gameActive) {
+        turnText.textContent = 'Your turn!';
+        turnText.className = 'font-heading text-heading-sm text-primary';
+      } else if (!gameActive) {
+        turnText.textContent = 'Game Over';
+        turnText.className = 'font-heading text-heading-sm text-dark-text-muted';
       } else {
-        const currentPlayer = group?.members?.find(m => m.player_id === group?.current_turn_player_id);
-        const name = currentPlayer?.profiles?.display_name || 'Another student';
-        turnText.textContent = `⏳ ${name} is up next. You can try submitting, but the chain expects their word first.`;
+        turnText.textContent = 'WordBot is thinking...';
+        turnText.className = 'font-heading text-heading-sm text-accent';
       }
-    } else if (isMyTurn) {
-      turnText.textContent = '🎯 Your turn! Type a word!';
     } else {
-      const currentPlayer = group?.members?.find(m => m.player_id === group?.current_turn_player_id);
-      const name = currentPlayer?.profiles?.display_name || 'Another student';
-      turnText.textContent = `⏳ Waiting for ${name}...`;
+      if (isMyTurn && gameActive) {
+        turnText.textContent = 'Your turn!';
+        turnText.className = 'font-heading text-heading-sm text-primary';
+      } else if (!gameActive) {
+        turnText.textContent = 'Game ended';
+        turnText.className = 'font-heading text-heading-sm text-dark-text-muted';
+      } else {
+        const currentPlayer = group.members?.find(m => m.player_id === group.current_turn_player_id);
+        const name = currentPlayer?.profiles?.display_name || 'Another player';
+        turnText.textContent = `${name}'s turn`;
+        turnText.className = 'font-heading text-heading-sm text-dark-text-muted';
+      }
     }
 
-    if (currentLetter && gameActive) {
-      letterDisplay.classList.remove('hidden');
-      requiredLetter.textContent = currentLetter.toUpperCase();
-    } else {
-      letterDisplay.classList.add('hidden');
+    // Update input prefix
+    const prefix = container.querySelector('#input-prefix');
+    if (prefix) {
+      prefix.textContent = currentLetter ? currentLetter.toUpperCase() : '';
     }
   }
 
@@ -784,49 +868,46 @@ export default async function PlayView(container, params) {
     if (area) area.classList.add('hidden');
   }
 
-  function showTimer(visible) {
+  function showTimer() {
     const timerContainer = container.querySelector('#timer-container');
-    if (timerContainer) {
-      if (visible) {
-        timerContainer.classList.remove('hidden');
-      } else {
-        timerContainer.classList.add('hidden');
-      }
-    }
+    if (timerContainer) timerContainer.classList.remove('hidden');
   }
 
-  function startTurnTimer(seconds) {
-    stopTimer();
-    showTimer(true);
+  function startTurnTimer() {
+    if (gameMode !== 'turns_timed') return;
+    showTimer();
 
-    secondsLeft = seconds || 60;
+    if (turnTimer) {
+      clearInterval(turnTimer);
+      turnTimer = null;
+    }
+
+    secondsLeft = group.turn_seconds || 60;
     const timerDisplay = container.querySelector('#timer-display');
     const timerBar = container.querySelector('#timer-bar');
 
-    if (timerDisplay) timerDisplay.textContent = `${secondsLeft}s`;
-    if (timerBar) timerBar.style.width = '100%';
+    if (!timerDisplay || !timerBar) return;
+
+    timerDisplay.textContent = `${secondsLeft}s`;
+    timerBar.style.width = '100%';
+    timerBar.className = 'progress-bar-fill bg-primary';
 
     turnTimer = setInterval(() => {
       secondsLeft--;
-      if (timerDisplay) timerDisplay.textContent = `${secondsLeft}s`;
-      if (timerBar) {
-        const pct = (secondsLeft / (seconds || 60)) * 100;
-        timerBar.style.width = `${pct}%`;
+      const pct = (secondsLeft / (group.turn_seconds || 60)) * 100;
+      timerDisplay.textContent = `${secondsLeft}s`;
 
-        if (secondsLeft <= 10) {
-          timerBar.classList.remove('bg-primary');
-          timerBar.classList.add('bg-error');
-        } else if (secondsLeft <= 20) {
-          timerBar.classList.remove('bg-primary', 'bg-error');
-          timerBar.classList.add('bg-secondary');
-        } else {
-          timerBar.classList.remove('bg-error', 'bg-secondary');
-          timerBar.classList.add('bg-primary');
-        }
+      if (secondsLeft <= 10) {
+        timerBar.className = 'progress-bar-fill bg-error';
+      } else if (secondsLeft <= 20) {
+        timerBar.className = 'progress-bar-fill bg-warning';
       }
 
+      timerBar.style.width = `${Math.max(pct, 0)}%`;
+
       if (secondsLeft <= 0) {
-        stopTimer();
+        clearInterval(turnTimer);
+        turnTimer = null;
         handleTimeOut();
       }
     }, 1000);
@@ -837,24 +918,27 @@ export default async function PlayView(container, params) {
       clearInterval(turnTimer);
       turnTimer = null;
     }
+    const timerContainer = container.querySelector('#timer-container');
+    if (timerContainer) timerContainer.classList.add('hidden');
   }
 
   function handleTimeOut() {
     if (isSolo) {
-      showToast('info', 'Time\'s up! Starting a new round...');
-      isMyTurn = false;
-      hideWordInput();
-      showTimer(false);
-      updateTurnIndicator();
+      showWordFeedback('Time\'s up! Bot\'s turn.');
       disableGameControls();
-      gameActive = false;
-    } else {
-      showToast('info', 'Time\'s up! Moving to next student...');
       isMyTurn = false;
-      hideWordInput();
-      showTimer(false);
-      updateTurnIndicator();
+      setTimeout(() => botPlay(), 1000);
+    } else {
+      // Dead mode: timing out eliminates the player and ends the game
+      if (rules.deadMode) {
+        disableGameControls();
+        deadModeEliminate(currentGameId, myUserId).catch(() => {});
+        showWordFeedback('Time\'s up! You were eliminated.');
+        return;
+      }
       skipTurn(currentGameId).catch(() => {});
+      showWordFeedback('Time\'s up! Turn skipped.');
+      disableGameControls();
     }
   }
 
@@ -868,30 +952,62 @@ export default async function PlayView(container, params) {
   function enableGameControls() {
     const input = container.querySelector('#word-input');
     const submitBtn = container.querySelector('#submit-word-btn');
-    if (input) input.disabled = false;
+    if (input) {
+      input.disabled = false;
+      input.focus();
+    }
     if (submitBtn) submitBtn.disabled = false;
   }
 
-  function showWordFeedback(message, type) {
+  function showWordFeedback(msg) {
     const feedback = container.querySelector('#word-feedback');
-    if (feedback) {
-      feedback.textContent = message;
-      feedback.className = `font-body-md text-body-md mt-2 ${type === 'error' ? 'text-error' : 'text-on-surface-variant'}`;
-      feedback.classList.remove('hidden');
+    if (feedback) feedback.textContent = msg;
+  }
+
+  // Show the player's gem delta after a combat game ends.
+  async function showCombatResult() {
+    try {
+      const { getGameResults } = await import('../supabase.js');
+      const results = await getGameResults(currentGameId);
+      const mine = results.find(r => r.player_id === myUserId);
+      if (mine && typeof mine.gems_delta === 'number' && mine.gems_delta !== 0) {
+        const sign = mine.gems_delta > 0 ? '+' : '';
+        showWordFeedback(`Game ended! You ${mine.gems_delta > 0 ? 'won' : 'lost'} ${sign}${mine.gems_delta} 💎`);
+      } else {
+        showWordFeedback('Game ended!');
+      }
+      // Refresh displayed balance from profile
+      const combatBalance = container.querySelector('#combat-balance');
+      if (combatBalance) combatBalance.textContent = store.get('profile')?.gems || 0;
+    } catch (e) {
+      showWordFeedback('Game ended!');
     }
   }
 
-  function cleanup() {
-    stopTimer();
-    if (botTimer) clearTimeout(botTimer);
+  // Setup
+  if (!isSolo) {
+    renderScoreboard();
+  }
+  setupWordInput();
+  setupLeaveButton();
+  setupDictionaryButton();
+
+  // Cleanup
+  return () => {
+    if (turnTimer) {
+      clearInterval(turnTimer);
+      turnTimer = null;
+    }
+    if (botTimer) {
+      clearInterval(botTimer);
+      botTimer = null;
+    }
     if (unsubscribe) {
       unsubscribe();
-      unsubscribe = null;
     }
-    store.set('currentGroup', null);
-  }
-
-  return () => {
-    cleanup();
+    if (cleanupPoll) {
+      clearInterval(cleanupPoll);
+      cleanupPoll = null;
+    }
   };
 }

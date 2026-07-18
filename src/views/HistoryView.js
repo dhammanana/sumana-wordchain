@@ -1,119 +1,106 @@
-/**
- * HistoryView - Game history for the current user
- *
- * Shows past games the user participated in with:
- * - Group name, code, date
- * - Your score and ranking
- * - Words you played
- * - Overall game status
- */
 import store from '../store.js';
 import { navigate } from '../router.js';
-import { getGameHistory, getGroupHistory, ensureAuth } from '../supabase.js';
+import { getGameHistory, getGroupHistory, getCurrentUser } from '../supabase.js';
 import { openDictionary } from '../components/DictionaryModal.js';
 import { formatTimeAgo } from '../utils/ui.js';
 
-export default async function HistoryView(container, params) {
+/**
+ * HistoryView - Game history with stats
+ */
+export default async function HistoryView(container) {
   store.set('currentView', '/history');
 
   container.innerHTML = `
-    <div class="flex flex-col gap-gap-lg pb-28">
+    <div class="flex flex-col gap-5 pb-28 animate-fade-in-up">
       <div class="flex items-center justify-between">
-        <h2 class="font-headline-md text-headline-md">Game History</h2>
-        <span class="px-3 py-1 bg-surface-container-high text-outline font-label-caps text-label-caps rounded-full">All time</span>
+        <h2 class="font-heading text-heading-md text-dark-text">Game History</h2>
+        <span class="px-3 py-1.5 rounded-lg bg-glass text-dark-text-muted text-label-sm">All time</span>
       </div>
 
       <!-- Tabs -->
-      <div class="flex gap-2 border-b border-outline-variant/30 pb-2">
-        <button id="tab-games" class="tab-btn px-gap-md py-gap-sm rounded-lg font-label-caps text-label-caps bg-primary text-on-primary transition-all">Games</button>
-        <button id="tab-words" class="tab-btn px-gap-md py-gap-sm rounded-lg font-label-caps text-label-caps bg-surface-container text-on-surface-variant hover:bg-surface-container-high transition-all">My Words</button>
+      <div class="flex gap-2 p-1 rounded-xl bg-glass">
+        <button id="tab-games" class="tab-btn flex-1 px-4 py-2 rounded-lg text-body-sm font-semibold bg-primary/15 text-primary transition-all">Games</button>
+        <button id="tab-words" class="tab-btn flex-1 px-4 py-2 rounded-lg text-body-sm font-semibold text-dark-text-muted hover:text-dark-text transition-all">My Words</button>
       </div>
 
       <!-- Loading -->
-      <div id="history-loading" class="flex flex-col items-center justify-center py-20">
-        <div class="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin mb-4"></div>
-        <p class="font-body-md text-body-md text-on-surface-variant">Loading your history...</p>
+      <div id="history-loading" class="flex flex-col items-center justify-center py-16">
+        <div class="w-8 h-8 border-[3px] border-primary border-t-transparent rounded-full animate-spin mb-4"></div>
+        <p class="text-body-sm text-dark-text-muted">Loading your history...</p>
       </div>
 
-      <!-- Games Tab Content -->
-      <div id="games-content" class="hidden space-y-gap-md">
-        <div id="games-empty" class="hidden text-center py-16 bg-surface-container-lowest border border-outline-variant rounded-2xl">
-          <span class="material-symbols-outlined text-5xl text-outline mb-3" style="font-variation-settings:'FILL'1">sports_esports</span>
-          <h3 class="font-headline-sm text-headline-sm mb-2">No games yet</h3>
-          <p class="font-body-md text-body-md text-on-surface-variant mb-4">Join or create a game to see your history here.</p>
-          <button onclick="window.location.hash='#/'"
-            class="px-6 py-3 bg-primary text-on-primary rounded-xl btn-shadow font-headline-sm">
-            Play a Game
-          </button>
+      <!-- Games Tab -->
+      <div id="games-content" class="hidden space-y-3">
+        <div id="games-empty" class="hidden text-center py-16 glass-card">
+          <div class="w-14 h-14 rounded-2xl bg-glass flex items-center justify-center mx-auto mb-4">
+            <span class="material-symbols-outlined text-3xl text-dark-text-muted" style="font-variation-settings:'FILL'1">sports_esports</span>
+          </div>
+          <h3 class="font-heading text-heading-sm text-dark-text mb-2">No games yet</h3>
+          <p class="text-body-sm text-dark-text-muted mb-4">Join or create a game to see your history here.</p>
+          <a href="#/" class="inline-block px-6 py-2.5 btn-primary text-body-sm">Play a Game</a>
         </div>
-        <div id="games-list" class="space-y-gap-md"></div>
+        <div id="games-list" class="space-y-3"></div>
       </div>
 
-      <!-- Words Tab Content -->
-      <div id="words-content" class="hidden space-y-gap-md">
-        <p class="font-body-md text-body-md text-on-surface-variant">Words you've played across all games.</p>
-        <div id="words-empty" class="hidden text-center py-16 bg-surface-container-lowest border border-outline-variant rounded-2xl">
-          <span class="material-symbols-outlined text-5xl text-outline mb-3" style="font-variation-settings:'FILL'1">abc</span>
-          <h3 class="font-headline-sm text-headline-sm mb-2">No words yet</h3>
-          <p class="font-body-md text-body-md text-on-surface-variant">Your played words will appear here.</p>
+      <!-- Words Tab -->
+      <div id="words-content" class="hidden space-y-3">
+        <div id="words-empty" class="hidden text-center py-16 glass-card">
+          <div class="w-14 h-14 rounded-2xl bg-glass flex items-center justify-center mx-auto mb-4">
+            <span class="material-symbols-outlined text-3xl text-dark-text-muted" style="font-variation-settings:'FILL'1">abc</span>
+          </div>
+          <h3 class="font-heading text-heading-sm text-dark-text mb-2">No words yet</h3>
+          <p class="text-body-sm text-dark-text-muted">Your played words will appear here.</p>
         </div>
-        <div id="words-list" class="space-y-gap-sm"></div>
+        <div id="words-list" class="space-y-2"></div>
       </div>
 
-      <!-- Error state -->
+      <!-- Error -->
       <div id="history-error" class="hidden text-center py-16">
-        <span class="material-symbols-outlined text-5xl text-error mb-3">error</span>
-        <p class="font-body-md text-body-md text-on-surface-variant" id="history-error-msg">Could not load history.</p>
-        <button id="retry-btn" class="mt-4 px-6 py-3 bg-primary text-on-primary rounded-xl btn-shadow">
-          Try Again
-        </button>
+        <div class="w-14 h-14 rounded-2xl bg-error-container flex items-center justify-center mx-auto mb-4">
+          <span class="material-symbols-outlined text-3xl text-error">error</span>
+        </div>
+        <p class="text-body-sm text-dark-text-muted" id="history-error-msg">Could not load history.</p>
+        <button id="retry-btn" class="mt-6 px-6 py-2.5 btn-primary text-body-sm">Try Again</button>
       </div>
     </div>
   `;
 
-  // --- Tab switching ---
-  container.querySelector('#tab-games').addEventListener('click', () => {
-    switchTab('games');
-  });
-  container.querySelector('#tab-words').addEventListener('click', () => {
-    switchTab('words');
-  });
+  // Tab switching
+  container.querySelector('#tab-games').addEventListener('click', () => switchTab('games'));
+  container.querySelector('#tab-words').addEventListener('click', () => switchTab('words'));
 
   function switchTab(tab) {
     container.querySelectorAll('.tab-btn').forEach(btn => {
-      btn.classList.remove('bg-primary', 'text-on-primary');
-      btn.classList.add('bg-surface-container', 'text-on-surface-variant');
+      btn.classList.remove('bg-primary/15', 'text-primary');
+      btn.classList.add('text-dark-text-muted');
     });
-
-    const activeTab = container.querySelector(`#tab-${tab}`);
-    activeTab.classList.add('bg-primary', 'text-on-primary');
-    activeTab.classList.remove('bg-surface-container', 'text-on-surface-variant');
+    const active = container.querySelector(`#tab-${tab}`);
+    active.classList.add('bg-primary/15', 'text-primary');
+    active.classList.remove('text-dark-text-muted');
 
     container.querySelector('#games-content').classList.toggle('hidden', tab !== 'games');
     container.querySelector('#words-content').classList.toggle('hidden', tab !== 'words');
   }
 
-  // --- Load data ---
+  // Load data
   try {
-    const user = await ensureAuth();
+    const user = await getCurrentUser();
     if (!user) throw new Error('Not authenticated');
 
     const [groupHistory, wordHistory] = await Promise.all([
-      getGroupHistory(),
-      getGameHistory(),
+      getGroupHistory(user.id),
+      getGameHistory(user.id),
     ]);
 
     container.querySelector('#history-loading').classList.add('hidden');
 
-    // Render games
-    if (groupHistory && groupHistory.length > 0) {
+    if (groupHistory?.length > 0) {
       renderGames(groupHistory);
     } else {
       container.querySelector('#games-empty').classList.remove('hidden');
     }
 
-    // Render words
-    if (wordHistory && wordHistory.length > 0) {
+    if (wordHistory?.length > 0) {
       renderWords(wordHistory);
     } else {
       container.querySelector('#words-empty').classList.remove('hidden');
@@ -125,50 +112,42 @@ export default async function HistoryView(container, params) {
     container.querySelector('#history-loading').classList.add('hidden');
     container.querySelector('#history-error').classList.remove('hidden');
     container.querySelector('#history-error-msg').textContent = error.message;
-
-    container.querySelector('#retry-btn').addEventListener('click', () => {
-      navigate('/history');
-    });
+    container.querySelector('#retry-btn').addEventListener('click', () => navigate('/history'));
   }
-
-  // --- Render functions ---
 
   function renderGames(history) {
     const list = container.querySelector('#games-list');
-
     list.innerHTML = history.map(item => {
       const g = item.groups || {};
       const statusBadge = g.status === 'finished'
-        ? '<span class="px-2 py-0.5 bg-surface-container text-outline text-[10px] font-bold uppercase rounded-full">Ended</span>'
+        ? '<span class="px-2 py-0.5 rounded-lg bg-glass text-dark-text-muted text-label-sm">Ended</span>'
         : g.status === 'active'
-        ? '<span class="px-2 py-0.5 bg-secondary-container text-on-secondary-container text-[10px] font-bold uppercase rounded-full">Active</span>'
-        : '<span class="px-2 py-0.5 bg-tertiary-fixed text-on-tertiary-fixed text-[10px] font-bold uppercase rounded-full">Waiting</span>';
+        ? '<span class="px-2 py-0.5 rounded-lg bg-success/10 text-success text-label-sm">Active</span>'
+        : '<span class="px-2 py-0.5 rounded-lg bg-warning-container text-warning text-label-sm">Waiting</span>';
 
       const playerScore = item.score || 0;
 
       return `
-        <div class="bg-surface-container-lowest border border-outline-variant rounded-2xl p-gap-lg hover:shadow-sm transition-all">
-          <div class="flex items-start justify-between mb-gap-sm">
+        <div class="glass-card-hover p-4">
+          <div class="flex items-start justify-between mb-2">
             <div class="flex-1 min-w-0">
               <div class="flex items-center gap-2 mb-1">
                 <span class="material-symbols-outlined text-primary text-sm">group</span>
-                <h3 class="font-headline-sm text-headline-sm truncate">${g.name || 'Unknown Game'}</h3>
+                <h3 class="font-heading text-heading-sm text-dark-text truncate">${g.name || 'Unknown Game'}</h3>
               </div>
-              <p class="font-label-caps text-label-caps text-outline">
+              <p class="text-label-sm text-dark-text-muted">
                 Code: ${g.code || '---'} · ${formatDate(item.joined_at)}
               </p>
             </div>
             ${statusBadge}
           </div>
-          <div class="flex items-center gap-gap-md mt-gap-md pt-gap-md border-t border-outline-variant/20">
-            <div class="flex-1 flex items-center gap-2">
-              <span class="material-symbols-outlined text-sm text-primary" style="font-variation-settings:'FILL'1">trophy</span>
-              <span class="font-headline-sm text-headline-sm text-primary font-bold">${playerScore}</span>
-              <span class="font-label-caps text-label-caps text-outline">pts</span>
+          <div class="flex items-center gap-3 mt-3 pt-3 border-t border-glass-border">
+            <div class="flex items-center gap-1.5">
+              <span class="material-symbols-outlined text-sm text-warning" style="font-variation-settings:'FILL'1">trophy</span>
+              <span class="font-heading text-heading-sm text-dark-text font-bold">${playerScore}</span>
+              <span class="text-label-sm text-dark-text-muted">pts</span>
             </div>
-            <button class="text-sm text-primary font-label-caps text-label-caps hover:underline" onclick="window.location.hash='#/lobby/${g.id}'">
-              View Game
-            </button>
+            <a href="#/lobby/${g.id}" class="ml-auto text-body-sm text-primary hover:underline">View Game</a>
           </div>
         </div>
       `;
@@ -178,7 +157,6 @@ export default async function HistoryView(container, params) {
   function renderWords(wordHistory) {
     const list = container.querySelector('#words-list');
 
-    // Group words by game
     const grouped = {};
     for (const w of wordHistory) {
       const groupId = w.group_id;
@@ -194,34 +172,31 @@ export default async function HistoryView(container, params) {
 
     list.innerHTML = Object.entries(grouped).map(([groupId, data]) => {
       const wordsHtml = data.words.map(w => `
-        <div class="flex items-center justify-between p-gap-sm bg-surface-container rounded-lg hover:bg-surface-container-high transition-all cursor-pointer" onclick="window.__openDictionary && window.__openDictionary('${w.word}')">
-          <div class="flex items-center gap-2">
-            <span class="font-headline-sm text-headline-sm text-primary font-bold">${w.word}</span>
-            <span class="font-label-caps text-label-caps text-outline">+${w.points || 0}</span>
+        <div class="flex items-center justify-between p-2.5 rounded-lg bg-glass hover:bg-glass-light transition-all cursor-pointer" onclick="window.__openDict && window.__openDict('${w.word}')">
+          <div class="flex items-center gap-2.5">
+            <span class="font-heading text-heading-sm text-dark-text font-bold">${w.word}</span>
+            <span class="text-label-sm text-dark-text-muted">+${w.points || 0}</span>
           </div>
-          <span class="font-label-caps text-label-caps text-outline">${formatTimeAgo(w.created_at)}</span>
+          <span class="text-label-sm text-dark-text-muted">${formatTimeAgo(w.created_at)}</span>
         </div>
       `).join('');
 
       return `
-        <div class="bg-surface-container-lowest border border-outline-variant rounded-2xl p-gap-lg">
-          <div class="flex items-center justify-between mb-gap-md">
+        <div class="glass-card p-4">
+          <div class="flex items-center justify-between mb-3">
             <div>
-              <h3 class="font-headline-sm text-headline-sm">${data.groupName}</h3>
-              <p class="font-label-caps text-label-caps text-outline">${data.groupCode} · ${data.words.length} word${data.words.length !== 1 ? 's' : ''}</p>
+              <h3 class="font-heading text-heading-sm text-dark-text">${data.groupName}</h3>
+              <p class="text-label-sm text-dark-text-muted">${data.groupCode} · ${data.words.length} word${data.words.length !== 1 ? 's' : ''}</p>
             </div>
           </div>
-          <div class="space-y-gap-sm">
+          <div class="space-y-1.5">
             ${wordsHtml}
           </div>
         </div>
       `;
     }).join('');
 
-    // Wire up dictionary lookup
-    window.__openDictionary = (word) => {
-      openDictionary(word);
-    };
+    window.__openDict = (word) => openDictionary(word);
   }
 
   function formatDate(dateStr) {
@@ -233,6 +208,4 @@ export default async function HistoryView(container, params) {
       year: 'numeric',
     });
   }
-
-  // formatTimeAgo imported from utils/ui.js
 }

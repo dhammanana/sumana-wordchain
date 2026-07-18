@@ -1,95 +1,97 @@
 <!DOCTYPE html>
-<html class="light" lang="en">
+<html class="dark" lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="description" content="WordChain - A multiplayer word chain game for learning English" />
-  <meta name="theme-color" content="#2563eb" />
+  <meta name="theme-color" content="#6c5ce7" />
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <link rel="apple-touch-icon" href="/favicon.svg" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <title>WordChain</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;700;800&family=Work+Sans:wght@400;500;600&family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Work+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/src/style.css" />
 </head>
-<body class="bg-background text-on-background min-h-screen font-body-md selection:bg-primary-container/30">
+<body class="min-h-screen">
+  <!-- Animated background blobs -->
+  <div class="blob blob-1"></div>
+  <div class="blob blob-2"></div>
+  <div class="blob blob-3"></div>
+
   <div id="app">
-    <!-- TopAppBar -->
-    <header id="top-bar" class="bg-surface/80 backdrop-blur-md shadow-sm sticky top-0 z-50 flex justify-between items-center px-container-padding-mobile md:px-container-padding-desktop py-gap-sm w-full border-b border-outline-variant/30">
-      <div class="flex items-center gap-gap-md">
-        <a href="#/" class="flex items-center gap-gap-sm">
-          <span class="material-symbols-outlined text-primary text-2xl" style="font-variation-settings:'FILL'1">hub</span>
-          <h1 class="font-display-lg text-display-lg-mobile font-extrabold text-primary tracking-tight">WordChain</h1>
-        </a>
-      </div>
-      <div class="flex items-center gap-gap-md">
+    <!-- Top Bar -->
+    <header id="top-bar" class="glass sticky top-0 z-40 flex items-center justify-between px-container-padding-mobile md:px-container-padding-desktop py-3 border-b border-glass-border">
+      <a href="#/" class="flex items-center gap-3 group">
+        <div class="w-9 h-9 rounded-xl bg-primary/15 flex items-center justify-center group-hover:bg-primary/25 transition-all">
+          <span class="material-symbols-outlined text-primary text-lg" style="font-variation-settings:'FILL'1">hub</span>
+        </div>
+        <h1 class="font-display text-display-md font-extrabold text-gradient hidden sm:block">WordChain</h1>
+        <h1 class="font-display text-heading-md font-extrabold text-gradient sm:hidden">WC</h1>
+      </a>
+      <div class="flex items-center gap-3">
         <span id="connection-status" class="w-2 h-2 rounded-full bg-secondary hidden" title="Connected"></span>
-        <button id="profile-btn" class="w-10 h-10 flex items-center justify-center rounded-full text-on-surface-variant hover:bg-surface-container-highest transition-all hover:scale-105">
-          <span class="material-symbols-outlined">account_circle</span>
+        <div id="user-badge" class="hidden flex items-center gap-2 px-3 py-1.5 rounded-xl bg-glass border border-glass-border">
+          <span id="user-gems" class="text-label-sm text-warning font-bold">0 💎</span>
+          <div class="w-1 h-1 rounded-full bg-dark-border"></div>
+          <span id="user-name-display" class="text-body-sm text-dark-text-muted max-w-[100px] truncate"></span>
+        </div>
+        <button id="profile-btn" class="w-9 h-9 flex items-center justify-center rounded-xl text-dark-text-muted hover:bg-glass-light hover:text-dark-text transition-all">
+          <span class="material-symbols-outlined text-xl">account_circle</span>
         </button>
       </div>
     </header>
 
-    <!-- Main Content Area -->
-    <main id="view-container" class="max-w-[800px] mx-auto px-container-padding-mobile md:px-container-padding-desktop py-gap-lg min-h-[calc(100vh-140px)]">
-      <!-- View content rendered here by router -->
-      <div id="view-content" class="animate-slide-up"></div>
+    <!-- Main Content -->
+    <main id="view-container" class="max-w-[800px] mx-auto px-container-padding-mobile md:px-container-padding-desktop py-6 min-h-[calc(100vh-130px)]">
+      <div id="view-content" class="animate-fade-in"></div>
     </main>
 
-    <!-- Bottom Navigation Bar - Study-focused labels -->
-    <nav id="bottom-nav" class="fixed bottom-0 left-0 w-full z-50 flex justify-around items-center px-container-padding-mobile pb-gap-md pt-gap-sm bg-surface/90 backdrop-blur-lg shadow-[0_-2px_15px_rgba(0,0,0,0.05)] border-t border-outline-variant/20 rounded-t-2xl">
-      <a href="#/" class="nav-item flex flex-col items-center justify-center px-4 py-1.5 text-outline hover:text-primary transition-all" data-route="/">
-        <span class="material-symbols-outlined text-xl">auto_stories</span>
-        <span class="font-label-caps text-label-caps">Study</span>
+    <!-- Bottom Navigation -->
+    <nav id="bottom-nav" class="glass fixed bottom-0 left-0 w-full z-40 flex justify-around items-center px-container-padding-mobile pb-3 pt-2 border-t border-glass-border rounded-t-3xl">
+      <a href="#/" class="nav-item" data-route="/">
+        <span class="material-symbols-outlined text-xl">home</span>
+        <span class="text-label-sm mt-0.5">Home</span>
       </a>
-      <a href="#/" class="nav-item flex flex-col items-center justify-center px-4 py-1.5 text-outline hover:text-primary transition-all" data-route="/">
-        <span class="material-symbols-outlined text-xl">group_add</span>
-        <span class="font-label-caps text-label-caps">Create</span>
+      <a href="#/history" class="nav-item" data-route="/history">
+        <span class="material-symbols-outlined text-xl">history</span>
+        <span class="text-label-sm mt-0.5">History</span>
       </a>
-      <a href="#/history" class="nav-item flex flex-col items-center justify-center px-4 py-1.5 text-outline hover:text-primary transition-all" data-route="/history">
-        <span class="material-symbols-outlined text-xl">history_edu</span>
-        <span class="font-label-caps text-label-caps">History</span>
-      </a>
-      <a href="#/profile" class="nav-item flex flex-col items-center justify-center px-4 py-1.5 text-outline hover:text-primary transition-all" data-route="/profile">
+      <a href="#/profile" class="nav-item" data-route="/profile">
         <span class="material-symbols-outlined text-xl">person</span>
-        <span class="font-label-caps text-label-caps">Profile</span>
+        <span class="text-label-sm mt-0.5">Profile</span>
       </a>
     </nav>
 
     <!-- Dictionary Modal -->
-    <div id="dictionary-modal" class="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-on-background/50 backdrop-blur-sm hidden opacity-0 transition-opacity duration-300">
-      <div id="modal-content" class="bg-surface w-full max-w-md rounded-2xl shadow-2xl overflow-hidden scale-95 transition-transform duration-300 max-h-[80vh] overflow-y-auto">
-        <div class="p-gap-lg bg-primary-container text-on-primary-container">
-          <div class="flex justify-between items-start">
+    <div id="dictionary-modal" class="modal-backdrop hidden opacity-0 transition-opacity duration-300">
+      <div id="modal-content" class="glass-strong w-full max-w-md rounded-3xl overflow-hidden scale-95 transition-transform duration-300 max-h-[85vh] overflow-y-auto">
+        <div class="p-6 pb-4 border-b border-glass-border">
+          <div class="flex items-center justify-between">
             <div>
-              <h4 id="modal-word" class="font-display-lg text-display-lg-mobile font-extrabold uppercase tracking-tight"></h4>
-              <p id="modal-phonetic" class="font-label-caps text-label-caps opacity-80 italic"></p>
+              <h4 id="modal-word" class="font-display text-heading-lg font-extrabold text-gradient uppercase"></h4>
+              <p id="modal-phonetic" class="text-body-sm text-dark-text-muted mt-1 italic"></p>
             </div>
-            <button id="modal-close" class="material-symbols-outlined bg-white/10 p-2 rounded-full hover:bg-white/20 transition-all hover:scale-105">close</button>
+            <button id="modal-close" class="w-9 h-9 flex items-center justify-center rounded-xl bg-glass text-dark-text-muted hover:bg-glass-light hover:text-dark-text transition-all">
+              <span class="material-symbols-outlined text-lg">close</span>
+            </button>
           </div>
         </div>
-        <div id="modal-body" class="p-gap-lg space-y-gap-md">
-          <div class="flex items-center gap-2 mb-2">
-            <span class="material-symbols-outlined text-primary text-lg">menu_book</span>
-            <span class="font-label-caps text-label-caps text-outline">DEFINITIONS</span>
+        <div id="modal-body" class="p-6 space-y-4">
+          <div class="flex items-center gap-2 mb-3">
+            <span class="material-symbols-outlined text-primary text-sm">menu_book</span>
+            <span class="text-label-sm text-dark-text-muted tracking-wider">DEFINITIONS</span>
           </div>
-          <div id="modal-definitions" class="space-y-gap-md">
-            <div class="animate-pulse bg-surface-container-high h-16 rounded-lg"></div>
-          </div>
-          <div id="modal-translate" class="hidden pt-gap-md border-t border-outline-variant/30">
-            <button id="translate-btn" class="flex items-center gap-2 text-primary font-label-caps text-label-caps hover:underline">
-              <span class="material-symbols-outlined text-lg">translate</span>
-              Translate to my language
-            </button>
+          <div id="modal-definitions" class="space-y-4">
+            <div class="skeleton h-20 rounded-xl"></div>
           </div>
         </div>
       </div>
     </div>
 
     <!-- Toast Container -->
-    <div id="toast-container" class="fixed top-20 right-4 z-[200] space-y-2 pointer-events-none"></div>
+    <div id="toast-container" class="fixed top-20 right-4 z-[60] space-y-2 pointer-events-none"></div>
   </div>
   <script type="module" src="/src/main.js"></script>
 </body>

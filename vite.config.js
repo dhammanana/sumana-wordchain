@@ -15,8 +15,8 @@ export default defineConfig({
         name: 'WordChain',
         short_name: 'WordChain',
         description: 'A multiplayer word chain game for learning English',
-        theme_color: '#2563eb',
-        background_color: '#f8f9ff',
+        theme_color: '#6c5ce7',
+        background_color: '#0a0a14',
         display: 'standalone',
         start_url: '/wordchain/',
         icons: [
@@ -33,7 +33,7 @@ export default defineConfig({
         ],
       },
       workbox: {
-        globPatterns: ['**/*.{js,css,html,json,svg}'],
+        globPatterns: ['**/*.{js,css,html,json,svg,png}'],
         runtimeCaching: [
           {
             urlPattern: /^https:\/\/api\.dictionaryapi\.dev\/.*/i,

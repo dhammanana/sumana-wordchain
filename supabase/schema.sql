@@ -7,10 +7,74 @@
 create table if not exists profiles (
   id uuid primary key references auth.users(id) on delete cascade,
   display_name text not null,
-  avatar_seed text not null default gen_random_uuid()::text,
-  theme text not null default 'emerald',
+  avatar_url text,
+  email text,
+  provider text,
+  gems integer not null default 0,
+  total_score integer not null default 0,
+  total_days_active integer not null default 0,
+  last_active_date date,
   created_at timestamptz default now()
 );
+
+-- Function to increment active day count (call once per day per user)
+create or replace function track_user_activity(user_id_param uuid)
+returns void
+language plpgsql
+security definer
+as $$
+begin
+  update profiles
+  set
+    last_active_date = current_date,
+    total_days_active = case
+      when last_active_date is null or last_active_date < current_date then total_days_active + 1
+      else total_days_active
+    end
+  where id = user_id_param;
+end;
+$$;
+
+-- Function to add score and convert to gems (100 points = 1 gem)
+create or replace function add_score_and_gems(user_id_param uuid, score_delta integer)
+returns void
+language plpgsql
+security definer
+as $$
+begin
+  update profiles
+  set
+    total_score = total_score + score_delta,
+    gems = gems + floor(score_delta / 100)
+  where id = user_id_param;
+end;
+$$;
+
+-- Auto-create a profile row when a new auth user signs up (safety net)
+create or replace function handle_new_user()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  insert into public.profiles (id, display_name, avatar_url, email, provider)
+  values (
+    new.id,
+    coalesce(new.raw_user_meta_data->>'full_name', new.raw_user_meta_data->>'name', new.raw_user_meta_data->>'user_name', split_part(new.email, '@', 1), 'Player'),
+    coalesce(new.raw_user_meta_data->>'avatar_url', new.raw_user_meta_data->>'picture', null),
+    new.email,
+    coalesce(new.raw_app_meta_data->>'provider', (new.identities->0->>'provider'), 'email')
+  )
+  on conflict (id) do nothing;
+  return new;
+end;
+$$;
+
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created
+after insert on auth.users
+for each row execute function handle_new_user();
 
 -- 2. GROUPS TABLE
 create table if not exists groups (
@@ -172,6 +236,15 @@ begin
   update group_members set score = score + v_points
   where group_id = new.group_id and player_id = new.player_id;
 
+  -- Update player's total_score and gems in profiles (100 points = 1 gem)
+  update profiles set
+    total_score = total_score + v_points,
+    gems = gems + floor((total_score + v_points) / 100) - floor(total_score / 100)
+  where id = new.player_id;
+
+  -- Track daily activity
+  perform track_user_activity(new.player_id);
+
   -- Determine next letter (last letter of new word)
   v_last_letter := lower(substr(new.word, v_word_length, 1));
 
@@ -301,6 +374,21 @@ $$;
 -- ============================================================
 -- HELPER: Generate a fun group code
 -- ============================================================
+
+-- Update RLS policies for profiles (allow reading avatar_url, email, gems)
+drop policy if exists "profiles_select" on profiles;
+create policy "profiles_select" on profiles for select using (true);
+
+-- Drop old avatar_seed column references, use avatar_url
+-- Helper: get total score for a user (used by profile view)
+create or replace function get_total_score(user_id_param uuid)
+returns integer
+language sql
+security definer
+stable
+as $$
+  select coalesce(sum(score), 0) from group_members where player_id = user_id_param;
+$$;
 
 create or replace function generate_group_code()
 returns text

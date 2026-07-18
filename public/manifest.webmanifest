@@ -5,8 +5,8 @@
   "start_url": "/wordchain/",
   "scope": "/wordchain/",
   "display": "standalone",
-  "background_color": "#f8f9ff",
-  "theme_color": "#2563eb",
+  "background_color": "#0a0a14",
+  "theme_color": "#6c5ce7",
   "orientation": "portrait-primary",
   "icons": [
     {

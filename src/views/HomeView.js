@@ -1,332 +1,315 @@
-/**
- * HomeView - Main menu / study room creator
- *
- * Design note: This app is designed for monks and Buddhist practitioners.
- * Terminology focuses on "study", "practice", "learning" rather than "game".
- * Avatars use clean initials style with custom seeds for personalization.
- * The UI is calm, mindful - designed for vocabulary study sessions.
- */
 import store from '../store.js';
+import { signInWithProvider, getCurrentUser, getProfile, supabase } from '../supabase.js';
 import { navigate } from '../router.js';
-import { supabase, ensureAuth, getProfile, upsertProfile, createGroup } from '../supabase.js';
-import { generateGroupName } from '../utils/words.js';
-import { showToast } from '../utils/ui.js';
+import { showToast, updateUserBadge } from '../utils/ui.js';
 
-export default async function HomeView(container, params) {
-  store.set('currentView', '/');
+/**
+ * HomeView - Landing screen with social login & group creation
+ */
+export default async function HomeView(container) {
+  const user = store.get('user');
+  const profile = store.get('profile');
+  // Treat anonymous sessions as not-logged-in (defensive: anonymous auth may be enabled in Supabase)
+  const isAnon = !!user?.is_anonymous;
+  const isLoggedIn = !!(user && profile && !isAnon);
 
-  try {
-    // Track the selected game mode
-    let selectedMode = 'turns_timed';
+  container.innerHTML = `
+    <div class="flex flex-col gap-6 pb-28 animate-fade-in-up">
 
-    container.innerHTML = `
-    <!-- Hero Section - Study Focused -->
-    <section class="grid grid-cols-1 md:grid-cols-3 gap-gap-md mb-gap-lg">
-      <div class="md:col-span-2 relative overflow-hidden rounded-2xl p-gap-lg bg-gradient-to-br from-primary-container/80 to-secondary-container/40 min-h-[220px] flex flex-col justify-end">
-        <div class="floating-blob bg-white/10 w-48 h-48 -top-10 -right-10"></div>
-        <div class="relative z-10">
-          <div class="flex items-center gap-2 mb-2">
-            <span class="px-3 py-1 bg-white/20 text-white text-xs font-bold uppercase rounded-full">Study Group</span>
-            <span class="px-3 py-1 bg-secondary-container/30 text-white text-xs font-bold uppercase rounded-full">Vocabulary</span>
+      ${!isLoggedIn ? `
+        <!-- Hero Section (not logged in) -->
+        <div class="glass-card p-8 text-center relative overflow-hidden">
+          <div class="absolute inset-0 bg-gradient-to-br from-primary/5 via-transparent to-secondary/5 pointer-events-none"></div>
+          <div class="relative z-10">
+            <div class="w-16 h-16 rounded-2xl bg-primary/15 flex items-center justify-center mx-auto mb-5">
+              <span class="material-symbols-outlined text-3xl text-primary" style="font-variation-settings:'FILL'1">hub</span>
+            </div>
+            <h2 class="font-display text-display-md font-extrabold text-gradient mb-2">WordChain</h2>
+            <p class="text-body-md text-dark-text-muted max-w-sm mx-auto mb-8">
+              Learn English through play. Connect words, challenge friends, track your progress.
+            </p>
+
+            <!-- Social Login Buttons -->
+            <div class="space-y-3 max-w-sm mx-auto">
+              <button id="login-google" class="btn-google">
+                <svg class="w-5 h-5" viewBox="0 0 24 24">
+                  <path fill="#EA4335" d="M5.266 9.765A7.077 7.077 0 0 1 12 4.909c1.69 0 3.218.6 4.418 1.582L19.91 3C17.782 1.146 15.055 0 12 0 7.27 0 3.198 2.678 1.24 6.65l4.026 3.115Z"/>
+                  <path fill="#34A853" d="M16.04 18.013c-1.09.703-2.474 1.078-4.04 1.078a7.077 7.077 0 0 1-6.723-4.823l-4.04 3.067A11.965 11.965 0 0 0 12 24c2.933 0 5.735-1.043 7.834-3l-3.793-2.987Z"/>
+                  <path fill="#4A90E2" d="M19.834 21c2.195-2.048 3.566-5.09 3.566-9 0-.71-.109-1.473-.272-2.182H12v4.637h6.436c-.317 1.649-1.12 2.946-2.397 3.558l3.795 2.987Z"/>
+                  <path fill="#FBBC05" d="M5.266 14.765a7.08 7.08 0 0 1-.01-1.53L1.24 10.65A11.965 11.965 0 0 0 0 12c0 1.788.464 3.486 1.24 4.85l4.026-3.085Z"/>
+                </svg>
+                Continue with Google
+              </button>
+              <button id="login-facebook" class="btn-facebook">
+                <svg class="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
+                </svg>
+                Continue with Facebook
+              </button>
+              <button id="login-github" class="btn-github">
+                <svg class="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
+                </svg>
+                Continue with GitHub
+              </button>
+            </div>
+
+            <p class="text-body-sm text-dark-text-muted mt-6">
+              By continuing, you agree to our Terms of Service.
+            </p>
           </div>
-          <h2 class="font-headline-md text-headline-md mb-2">WordChain Study</h2>
-          <p class="font-body-lg text-body-lg opacity-90 max-w-md">Build vocabulary together. Connect words mindfully, learn from each other in a calm study environment.</p>
         </div>
-      </div>
-      <div class="rounded-2xl p-gap-md bg-surface-container-high border border-outline-variant flex flex-col justify-center items-center text-center">
-        <span class="material-symbols-outlined text-primary text-5xl mb-2" style="font-variation-settings:'FILL'1">groups</span>
-        <p class="font-headline-sm text-headline-sm" id="active-players-count">—</p>
-        <p class="font-label-caps text-label-caps text-outline uppercase">Active Learners</p>
-      </div>
-    </section>
+      ` : `
+        <!-- Welcome Back (logged in) -->
+        <div class="glass-card p-6 flex items-center gap-4 animate-fade-in-up">
+          <div class="w-14 h-14 rounded-2xl bg-primary/15 flex items-center justify-center overflow-hidden flex-shrink-0">
+            ${profile?.avatar_url
+              ? `<img src="${profile.avatar_url}" alt="" class="w-full h-full object-cover" />`
+              : `<span class="material-symbols-outlined text-2xl text-primary" style="font-variation-settings:'FILL'1">person</span>`
+            }
+          </div>
+          <div class="flex-1 min-w-0">
+            <h2 class="font-heading text-heading-sm text-dark-text truncate">Welcome back, ${profile?.display_name || 'Player'}!</h2>
+            <p class="text-body-sm text-dark-text-muted mt-0.5">
+              <span class="text-warning">${profile?.gems || 0} 💎</span>
+              <span class="mx-2">·</span>
+              ${profile?.total_days_active || 0} day streak
+            </p>
+          </div>
+        </div>
+      `}
 
-    <!-- Main Actions - Study focused -->
-    <section class="bg-surface-container-lowest border border-outline-variant rounded-2xl p-gap-lg shadow-sm mb-gap-lg">
-      <div class="space-y-gap-lg text-center py-6" id="create-action-container">
-        <div id="home-initial">
-          <h3 class="font-headline-md text-headline-md mb-gap-sm">Begin a Study Session</h3>
-          <p class="font-body-md text-body-md text-on-surface-variant mb-gap-lg">Create a quiet study room and invite friends to practice English vocabulary together.</p>
-          <div class="flex flex-col sm:flex-row gap-gap-md justify-center">
-            <button id="create-group-btn" class="px-8 py-4 bg-primary text-on-primary font-headline-sm text-headline-sm rounded-xl btn-shadow transition-all flex items-center justify-center gap-md">
-              <span class="material-symbols-outlined" style="font-variation-settings:'FILL'1">add_circle</span>
-              Create Study Group
+      ${isLoggedIn ? `
+        <!-- Create Game Section -->
+        <div class="glass-card p-6 space-y-5 animate-fade-in-up animate-delay-100">
+          <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl bg-secondary/15 flex items-center justify-center">
+              <span class="material-symbols-outlined text-xl text-secondary" style="font-variation-settings:'FILL'1">play_circle</span>
+            </div>
+            <div>
+              <h3 class="font-heading text-heading-sm text-dark-text">Start a Game</h3>
+              <p class="text-body-sm text-dark-text-muted">Create a group and invite friends</p>
+            </div>
+          </div>
+
+          <div class="space-y-3">
+            <div>
+              <label class="text-label-sm text-dark-text-muted mb-2 block">Group Name</label>
+              <input id="group-name-input" type="text" maxlength="30" placeholder="Study Room"
+                class="input-glass" />
+            </div>
+            <div>
+              <label class="text-label-sm text-dark-text-muted mb-2 block">Game Mode</label>
+              <div class="flex gap-2">
+                <button class="mode-btn flex-1 px-3 py-2.5 rounded-xl bg-primary/15 text-primary border border-primary/20 font-heading text-body-sm font-semibold transition-all" data-mode="turns_timed">
+                  <span class="material-symbols-outlined text-lg block mx-auto mb-1">timer</span>
+                  Timed
+                </button>
+                <button class="mode-btn flex-1 px-3 py-2.5 rounded-xl bg-glass text-dark-text-muted border border-glass-border font-heading text-body-sm font-semibold transition-all hover:bg-glass-light" data-mode="turns_relaxed">
+                  <span class="material-symbols-outlined text-lg block mx-auto mb-1">self_improvement</span>
+                  Relaxed
+                </button>
+                <button class="mode-btn flex-1 px-3 py-2.5 rounded-xl bg-glass text-dark-text-muted border border-glass-border font-heading text-body-sm font-semibold transition-all hover:bg-glass-light" data-mode="free_for_all">
+                  <span class="material-symbols-outlined text-lg block mx-auto mb-1">diversity_3</span>
+                  Open
+                </button>
+              </div>
+            </div>
+            <button id="create-game-btn" class="w-full py-3.5 btn-primary text-body-md flex items-center justify-center gap-2">
+              <span class="material-symbols-outlined text-lg">add</span>
+              Create Game Room
             </button>
-            <div class="flex items-center gap-3">
-              <span class="text-outline font-label-caps text-label-caps uppercase">or</span>
-              <button id="join-group-btn" class="px-8 py-4 bg-surface-container-high text-primary font-headline-sm text-headline-sm rounded-xl border-2 border-primary/30 hover:border-primary transition-all flex items-center justify-center gap-md">
-                <span class="material-symbols-outlined">login</span>
-                Join Study
+          </div>
+
+          <!-- Created game link display -->
+          <div id="created-game" class="hidden animate-fade-in">
+            <div class="p-4 rounded-xl bg-secondary/10 border border-secondary/20">
+              <p class="text-body-sm text-secondary font-semibold mb-2">Game Created! 🎉</p>
+              <div class="flex items-center gap-2">
+                <input id="invite-link-input" type="text" readonly
+                  class="flex-1 px-3 py-2.5 rounded-lg bg-glass border border-glass-border text-body-sm text-dark-text font-mono outline-none" />
+                <button id="copy-invite-btn" class="px-4 py-2.5 rounded-lg bg-primary/15 text-primary hover:bg-primary/25 transition-all">
+                  <span class="material-symbols-outlined text-lg">content_copy</span>
+                </button>
+              </div>
+              <button id="go-to-lobby-btn" class="w-full mt-3 py-2.5 rounded-xl btn-secondary text-body-sm">
+                Go to Lobby
               </button>
             </div>
           </div>
         </div>
-        <div id="home-join-form" class="hidden animate-slide-up">
-          <h3 class="font-headline-md text-headline-md mb-gap-sm">Join a Study Session</h3>
-          <p class="font-body-md text-body-md text-on-surface-variant mb-gap-lg">Enter the invite code shared by your study partner.</p>
-          <div class="flex flex-col sm:flex-row items-center gap-gap-md max-w-md mx-auto">
-            <input id="join-code-input" type="text" placeholder="e.g. vibrant-tiger-42"
-              class="w-full px-gap-md py-4 bg-surface-container-high border-2 border-outline-variant focus:border-primary focus:ring-0 rounded-xl font-body-md text-body-md outline-none transition-all text-center uppercase"
-              maxlength="50" />
-            <button id="join-submit-btn" class="w-full sm:w-auto px-gap-lg py-4 bg-primary text-on-primary font-headline-sm text-headline-sm rounded-xl btn-shadow transition-all flex items-center justify-center gap-sm whitespace-nowrap">
-              <span class="material-symbols-outlined">arrow_forward</span>
+
+        <!-- Join Game Section -->
+        <div class="glass-card p-6 space-y-4 animate-fade-in-up animate-delay-200">
+          <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl bg-accent/15 flex items-center justify-center">
+              <span class="material-symbols-outlined text-xl text-accent" style="font-variation-settings:'FILL'1">group_add</span>
+            </div>
+            <div>
+              <h3 class="font-heading text-heading-sm text-dark-text">Join a Game</h3>
+              <p class="text-body-sm text-dark-text-muted">Enter an invite code to join a friend's game</p>
+            </div>
+          </div>
+          <div class="flex gap-2">
+            <input id="join-code-input" type="text" maxlength="30" placeholder="Enter invite code..."
+              class="input-glass flex-1 uppercase" />
+            <button id="join-game-btn" class="px-6 py-3.5 rounded-xl btn-secondary text-body-sm whitespace-nowrap">
               Join
             </button>
           </div>
-          <button id="join-back-btn" class="mt-4 text-sm text-outline hover:text-primary transition-colors">← Back</button>
         </div>
 
-        <!-- Game Mode Selector (shown after clicking Create) -->
-        <div id="mode-selector" class="hidden animate-slide-up border-t border-outline-variant/20 pt-gap-lg mt-gap-lg">
-          <h3 class="font-headline-sm text-headline-sm mb-gap-md">Choose Study Mode</h3>
-          <p class="font-body-md text-body-md text-on-surface-variant mb-gap-md">Select how you'd like to practice together:</p>
-          <div class="grid grid-cols-1 sm:grid-cols-3 gap-gap-md">
-            <button class="mode-option bg-surface-container rounded-xl p-gap-md border-2 border-primary text-left hover:bg-surface-container-high transition-all cursor-pointer" data-mode="turns_timed">
-              <span class="material-symbols-outlined text-primary text-2xl mb-1" style="font-variation-settings:'FILL'1">timer</span>
-              <p class="font-headline-sm text-headline-sm">Guided Turns</p>
-              <p class="font-label-caps text-label-caps text-outline mt-1">Take turns with a gentle timer. Practice mindful word recall with a soft time guide.</p>
-            </button>
-            <button class="mode-option bg-surface-container rounded-xl p-gap-md border-2 border-outline-variant text-left hover:bg-surface-container-high transition-all cursor-pointer" data-mode="turns_relaxed">
-              <span class="material-symbols-outlined text-tertiary text-2xl mb-1" style="font-variation-settings:'FILL'1">self_improvement</span>
-              <p class="font-headline-sm text-headline-sm">Relaxed Turns</p>
-              <p class="font-label-caps text-label-caps text-outline mt-1">Take turns with no time pressure. A session can last for days — study at your own pace.</p>
-            </button>
-            <button class="mode-option bg-surface-container rounded-xl p-gap-md border-2 border-outline-variant text-left hover:bg-surface-container-high transition-all cursor-pointer" data-mode="free_for_all">
-              <span class="material-symbols-outlined text-secondary text-2xl mb-1" style="font-variation-settings:'FILL'1">diversity_3</span>
-              <p class="font-headline-sm text-headline-sm">Open Practice</p>
-              <p class="font-label-caps text-label-caps text-outline mt-1">Anyone can add words at any time. Perfect for a shared long-running vocabulary board.</p>
-            </button>
+        <!-- Solo Play -->
+        <div class="glass-card-hover p-6 flex items-center gap-4 cursor-pointer animate-fade-in-up animate-delay-300" id="solo-play-btn">
+          <div class="w-12 h-12 rounded-xl bg-warning-container flex items-center justify-center">
+            <span class="material-symbols-outlined text-2xl text-warning" style="font-variation-settings:'FILL'1">person</span>
           </div>
-          <button id="create-with-mode-btn" class="mt-gap-md w-full py-4 bg-primary text-on-primary font-headline-sm text-headline-sm rounded-xl btn-shadow transition-all flex items-center justify-center gap-md">
-            <span class="material-symbols-outlined" style="font-variation-settings:'FILL'1">add_circle</span>
-            Create Study Group
-          </button>
+          <div class="flex-1">
+            <h3 class="font-heading text-heading-sm text-dark-text">Practice Solo</h3>
+            <p class="text-body-sm text-dark-text-muted">Play offline against the bot</p>
+          </div>
+          <span class="material-symbols-outlined text-dark-text-muted">chevron_right</span>
         </div>
-      </div>
-    </section>
 
-    <!-- Create Group Progress (Hidden initially) -->
-    <div id="create-progress" class="hidden mb-gap-lg bg-surface-container-lowest border border-outline-variant rounded-2xl p-gap-lg">
-      <div class="flex items-center gap-4">
-        <div class="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin"></div>
-        <div>
-          <p class="font-headline-sm text-headline-sm">Creating your study room...</p>
-          <p class="font-body-md text-body-md text-on-surface-variant">Setting up the shared space.</p>
+        <!-- Active players count -->
+        <div class="text-center animate-fade-in-up animate-delay-300">
+          <p class="text-body-sm text-dark-text-muted">
+            <span id="active-players-count" class="text-primary font-semibold">--</span> players active right now
+          </p>
         </div>
-      </div>
+      ` : ''}
     </div>
-
-    <!-- Group Created State (Hidden initially) -->
-    <div id="group-created" class="hidden mb-gap-lg bg-surface-container-lowest border border-outline-variant rounded-2xl p-gap-lg animate-slide-up">
-      <div class="text-center py-6">
-        <div class="bg-secondary-container text-on-secondary-container px-gap-md py-gap-sm rounded-full inline-flex items-center gap-sm mb-gap-md">
-          <span class="material-symbols-outlined text-sm" style="font-variation-settings:'FILL'1">check_circle</span>
-          <span class="font-label-caps text-label-caps">STUDY ROOM READY</span>
-        </div>
-        <h3 class="font-headline-md text-headline-md mb-gap-sm">Invite your friends</h3>
-        <p class="font-body-md text-body-md text-on-surface-variant mb-gap-lg">Share this link or code to let others join your study session.</p>
-        <div class="flex flex-col items-center gap-gap-md max-w-md mx-auto">
-          <div id="group-code-display" class="w-full bg-surface-container-high px-gap-md py-4 rounded-xl border-2 border-primary/30 font-mono text-primary font-bold text-lg text-center tracking-wider">
-            loading...
-          </div>
-          <div class="flex gap-gap-md w-full">
-            <button id="copy-link-btn" class="flex-1 px-gap-lg py-4 bg-primary-container text-on-primary-container font-label-caps text-label-caps rounded-xl hover:brightness-110 active:scale-95 transition-all flex items-center justify-center gap-sm">
-              <span class="material-symbols-outlined">content_copy</span>
-              Copy Link
-            </button>
-            <button id="go-to-lobby-btn" class="flex-1 px-gap-lg py-4 bg-primary text-on-primary font-label-caps text-label-caps rounded-xl btn-shadow transition-all flex items-center justify-center gap-sm">
-              <span class="material-symbols-outlined">arrow_forward</span>
-              Go to Study Room
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- How to Study -->
-    <section class="grid grid-cols-1 md:grid-cols-2 gap-gap-md items-stretch mb-gap-lg">
-      <div class="bg-surface-container rounded-2xl p-gap-lg flex flex-col justify-between">
-        <div>
-          <h3 class="font-headline-sm text-headline-sm flex items-center gap-sm mb-gap-md">
-            <span class="material-symbols-outlined text-tertiary">lightbulb</span>
-            How to Study
-          </h3>
-          <div class="space-y-gap-md">
-            <div class="flex gap-md">
-              <div class="flex-shrink-0 w-8 h-8 rounded-full bg-tertiary-fixed text-on-tertiary-fixed flex items-center justify-center font-bold text-sm">1</div>
-              <p class="font-body-md text-body-md">The first student submits any valid English word (e.g., <span class="font-bold text-primary">APPLE</span>).</p>
-            </div>
-            <div class="flex gap-md">
-              <div class="flex-shrink-0 w-8 h-8 rounded-full bg-tertiary-fixed text-on-tertiary-fixed flex items-center justify-center font-bold text-sm">2</div>
-              <p class="font-body-md text-body-md">The next word must start with the <span class="font-bold text-error">final letter</span> of the previous word.</p>
-            </div>
-            <div class="flex gap-md">
-              <div class="flex-shrink-0 w-8 h-8 rounded-full bg-tertiary-fixed text-on-tertiary-fixed flex items-center justify-center font-bold text-sm">3</div>
-              <p class="font-body-md text-body-md">Example: Apple → <span class="font-bold text-primary">E</span>lephant → <span class="font-bold text-primary">T</span>rain. Look up new words in the dictionary!</p>
-            </div>
-          </div>
-        </div>
-        <div class="mt-gap-lg pt-gap-md border-t border-outline-variant/30 italic text-on-surface-variant font-body-md">
-          Note: Words cannot be repeated in the same session. Use the dictionary to learn new words!
-        </div>
-      </div>
-      <div class="relative min-h-[200px] rounded-2xl overflow-hidden bg-gradient-to-br from-primary-container/10 to-secondary-container/10 flex items-center justify-center p-6">
-        <div class="text-center">
-          <span class="material-symbols-outlined text-6xl text-primary mb-2" style="font-variation-settings:'FILL'1">auto_stories</span>
-          <p class="font-headline-sm text-headline-sm text-primary">Build your vocabulary!</p>
-          <p class="font-body-md text-body-md text-on-surface-variant mt-1">The longer the word, the more you learn.</p>
-        </div>
-      </div>
-    </section>
-
-    <!-- Solo Study CTA -->
-    <section class="bg-gradient-to-r from-tertiary-container/10 to-primary-container/10 rounded-2xl p-gap-lg border border-tertiary/10 mb-gap-lg">
-      <div class="flex flex-col sm:flex-row items-center justify-between gap-gap-md">
-        <div>
-          <h3 class="font-headline-sm text-headline-sm flex items-center gap-2">
-            <span class="material-symbols-outlined text-secondary">person</span>
-            Study Alone
-          </h3>
-          <p class="font-body-md text-body-md text-on-surface-variant">Practice with a word bot companion. No pressure, learn at your own pace.</p>
-        </div>
-        <button id="solo-play-btn" class="px-6 py-3 bg-secondary text-on-secondary font-headline-sm text-headline-sm rounded-xl btn-tactile transition-all flex items-center gap-2 whitespace-nowrap">
-          <span class="material-symbols-outlined">play_arrow</span>
-          Start Practice
-        </button>
-      </div>
-    </section>
-
-    <!-- Spacer for bottom nav -->
-    <div class="h-24"></div>
   `;
 
-  // --- Event Handlers ---
+  if (!isLoggedIn) {
+    // Social login handlers
+    setupSocialLogin('login-google', 'google');
+    setupSocialLogin('login-facebook', 'facebook');
+    setupSocialLogin('login-github', 'github');
+    return;
+  }
 
-  // "Create Study Group" button -> show mode selector
-  container.querySelector('#create-group-btn').addEventListener('click', () => {
-    container.querySelector('#home-initial').classList.add('hidden');
-    container.querySelector('#mode-selector').classList.remove('hidden');
-  });
+  // --- Logged-in handlers ---
 
-  // Mode selection
-  container.querySelectorAll('.mode-option').forEach(btn => {
+  // Game mode selection
+  let selectedMode = 'turns_timed';
+  container.querySelectorAll('.mode-btn').forEach(btn => {
     btn.addEventListener('click', () => {
-      container.querySelectorAll('.mode-option').forEach(b => {
-        b.classList.remove('border-primary', 'bg-primary-container/10');
-        b.classList.add('border-outline-variant');
+      container.querySelectorAll('.mode-btn').forEach(b => {
+        b.classList.remove('bg-primary/15', 'text-primary', 'border-primary/20');
+        b.classList.add('bg-glass', 'text-dark-text-muted', 'border-glass-border');
       });
-      btn.classList.remove('border-outline-variant');
-      btn.classList.add('border-primary', 'bg-primary-container/10');
+      btn.classList.add('bg-primary/15', 'text-primary', 'border-primary/20');
+      btn.classList.remove('bg-glass', 'text-dark-text-muted', 'border-glass-border');
       selectedMode = btn.dataset.mode;
-      container.querySelector('#create-with-mode-btn').classList.remove('hidden');
     });
   });
 
-  // Create study group with selected mode
-  container.querySelector('#create-with-mode-btn').addEventListener('click', async () => {
-    const progress = container.querySelector('#create-progress');
-    const modeSelector = container.querySelector('#mode-selector');
-    const created = container.querySelector('#group-created');
-    const codeDisplay = container.querySelector('#group-code-display');
+  // Create game
+  container.querySelector('#create-game-btn').addEventListener('click', async () => {
+    const nameInput = container.querySelector('#group-name-input');
+    const name = nameInput.value.trim() || 'Study Room';
+    const btn = container.querySelector('#create-game-btn');
+    const createdDiv = container.querySelector('#created-game');
 
-    modeSelector.classList.add('hidden');
-    progress.classList.remove('hidden');
+    btn.disabled = true;
+    btn.innerHTML = '<div class="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div> Creating...';
 
     try {
-      const user = await ensureAuth();
-      if (!user) throw new Error('Could not authenticate. Please try again.');
+      const { createGroup } = await import('../supabase.js');
+      const group = await createGroup(name, selectedMode, {});
+      const inviteLink = `${window.location.origin}/wordchain/#/join/${group.code}`;
 
-      // Ensure a profile exists
-      const existingProfile = store.get('profile');
-      if (!existingProfile) {
-        await upsertProfile({
-          display_name: `Student-${user.id.slice(0, 4)}`,
-          avatar_seed: user.id,
-        });
-      }
+      createdDiv.classList.remove('hidden');
+      container.querySelector('#invite-link-input').value = inviteLink;
 
-      const name = generateGroupName();
-      // Use the createGroup function from supabase.js which also adds host as group_member
-      const data = await createGroup(name, selectedMode);
+      btn.disabled = false;
+      btn.innerHTML = `<span class="material-symbols-outlined text-lg">add</span> Create Game Room`;
 
-      // Update store with profile info
-      const profile = await getProfile();
-      if (profile) store.set('profile', profile);
-
-      progress.classList.add('hidden');
-      created.classList.remove('hidden');
-
-      const fullLink = `${window.location.origin}/wordchain/#/join/${data.code}`;
-      codeDisplay.textContent = data.code;
-
-      container.querySelector('#copy-link-btn').onclick = () => {
-        navigator.clipboard.writeText(fullLink).then(() => {
-          const btn = container.querySelector('#copy-link-btn');
-          btn.innerHTML = '<span class="material-symbols-outlined">check</span> Copied!';
-          setTimeout(() => {
-            btn.innerHTML = '<span class="material-symbols-outlined">content_copy</span> Copy Link';
-          }, 2000);
-        });
+      // Copy link
+      container.querySelector('#copy-invite-btn').onclick = () => {
+        navigator.clipboard.writeText(inviteLink);
+        const copyBtn = container.querySelector('#copy-invite-btn');
+        copyBtn.innerHTML = '<span class="material-symbols-outlined text-lg">check</span>';
+        setTimeout(() => {
+          copyBtn.innerHTML = '<span class="material-symbols-outlined text-lg">content_copy</span>';
+        }, 2000);
+        showToast('success', 'Invite link copied!');
       };
 
+      // Go to lobby
       container.querySelector('#go-to-lobby-btn').onclick = () => {
-        navigate(`/lobby/${data.id}`);
+        navigate(`/lobby/${group.id}`);
       };
 
-      store.set('currentGroup', data);
+      // Auto-navigate to lobby
+      navigate(`/lobby/${group.id}`);
     } catch (error) {
-      progress.classList.add('hidden');
-      modeSelector.classList.remove('hidden');
-      showToast('error', 'Failed to create group: ' + error.message);
+      btn.disabled = false;
+      btn.innerHTML = `<span class="material-symbols-outlined text-lg">add</span> Create Game Room`;
+      showToast('error', error.message);
     }
   });
 
-  // Join Game - Show form
-  container.querySelector('#join-group-btn').addEventListener('click', () => {
-    container.querySelector('#home-initial').classList.add('hidden');
-    container.querySelector('#home-join-form').classList.remove('hidden');
-  });
-
-  // Join Game - Submit
-  container.querySelector('#join-submit-btn').addEventListener('click', async () => {
-    const code = container.querySelector('#join-code-input').value.trim().toLowerCase();
+  // Join game
+  container.querySelector('#join-game-btn').addEventListener('click', async () => {
+    const codeInput = container.querySelector('#join-code-input');
+    const code = codeInput.value.trim();
     if (!code) {
-      showToast('error', 'Please enter a group code.');
+      showToast('error', 'Please enter an invite code.');
       return;
     }
-    navigate(`/join/${code}`);
-  });
 
-  container.querySelector('#join-code-input').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      container.querySelector('#join-submit-btn').click();
+    try {
+      const { getGroupByCode } = await import('../supabase.js');
+      const group = await getGroupByCode(code);
+      if (!group) {
+        showToast('error', 'Group not found. Check the code.');
+        return;
+      }
+      navigate(`/join/${code}`);
+    } catch (error) {
+      showToast('error', error.message);
     }
   });
 
-  container.querySelector('#join-back-btn').addEventListener('click', () => {
-    container.querySelector('#home-join-form').classList.add('hidden');
-    container.querySelector('#home-initial').classList.remove('hidden');
-  });
-
-  // Solo Study
+  // Solo play
   container.querySelector('#solo-play-btn').addEventListener('click', () => {
     navigate('/play/solo');
   });
 
   // Load active player count
   loadActivePlayerCount();
-  } catch (e) {
-    console.error('[WordChain] HomeView render error:', e);
-  }
+}
+
+function setupSocialLogin(elementId, provider) {
+  const btn = document.getElementById(elementId);
+  if (!btn) return;
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    btn.innerHTML = '<div class="w-5 h-5 border-2 border-current border-t-transparent rounded-full animate-spin"></div> Signing in...';
+    try {
+      await signInWithProvider(provider);
+    } catch (error) {
+      showToast('error', error.message);
+      btn.disabled = false;
+      btn.innerHTML = btn.dataset.originalHtml || btn.innerHTML;
+    }
+  });
+  // Store original HTML
+  btn.dataset.originalHtml = btn.innerHTML;
 }
 
 async function loadActivePlayerCount() {
   try {
-    const { supabase } = await import('../supabase.js');
     const { count } = await supabase
-      .from('groups')
+      .from('profiles')
       .select('*', { count: 'exact', head: true })
-      .eq('status', 'active');
-    const countEl = document.getElementById('active-players-count');
-    if (countEl) countEl.textContent = count || 0;
-  } catch (e) {}
+      .gte('total_score', 1);
+    const el = document.getElementById('active-players-count');
+    if (el) el.textContent = count || 0;
+  } catch (e) {
+    const el = document.getElementById('active-players-count');
+    if (el) el.textContent = '0';
+  }
 }

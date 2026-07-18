@@ -102,7 +102,7 @@ async function fetchWiktionary(word) {
   };
 
   // Cache asynchronously
-  cacheDefinition(normalizedWord, parsed).catch(() => {});
+  cacheDefinition(word, parsed).catch(() => {});
 
   return parsed;
 }

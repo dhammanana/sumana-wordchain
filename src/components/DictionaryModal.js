@@ -16,14 +16,13 @@ export async function openDictionary(word) {
   const definitionsEl = document.getElementById('modal-definitions');
   const closeBtn = document.getElementById('modal-close');
 
-  // Set word and show loading
   wordEl.textContent = word.toUpperCase();
   phoneticEl.textContent = '';
   definitionsEl.innerHTML = `
     <div class="space-y-3">
       <div class="skeleton h-6 rounded-lg w-24"></div>
-      <div class="skeleton h-16 rounded-lg"></div>
-      <div class="skeleton h-16 rounded-lg"></div>
+      <div class="skeleton h-20 rounded-xl"></div>
+      <div class="skeleton h-20 rounded-xl"></div>
     </div>
   `;
 
@@ -35,7 +34,6 @@ export async function openDictionary(word) {
     content.classList.add('scale-100');
   }, 10);
 
-  // Fetch definition
   try {
     const data = await fetchDefinition(word);
 
@@ -43,27 +41,27 @@ export async function openDictionary(word) {
       phoneticEl.textContent = data.phonetic;
     }
 
-    if (data.meanings && data.meanings.length > 0) {
+    if (data.meanings?.length > 0) {
       definitionsEl.innerHTML = data.meanings.map(meaning => `
         <div class="space-y-2">
           <div class="flex items-center gap-2">
-            <span class="px-2 py-0.5 bg-primary-container/20 text-primary text-xs font-bold uppercase rounded-full">
+            <span class="px-2.5 py-1 rounded-lg bg-primary/15 text-primary text-label-sm font-semibold uppercase">
               ${meaning.partOfSpeech}
             </span>
           </div>
           <ul class="space-y-2">
             ${meaning.definitions.map((def, i) => `
-              <li class="p-gap-md bg-surface-container rounded-lg">
-                <p class="font-body-md text-on-background">${i + 1}. ${def.definition}</p>
+              <li class="p-3 rounded-xl bg-glass">
+                <p class="text-body-md text-dark-text">${i + 1}. ${def.definition}</p>
                 ${def.example ? `
-                  <p class="font-body-md text-on-surface-variant italic mt-1 border-l-2 border-primary/30 pl-3">
+                  <p class="text-body-sm text-dark-text-muted italic mt-2 border-l-2 border-primary/30 pl-3">
                     "${def.example}"
                   </p>
                 ` : ''}
                 ${def.synonyms?.length > 0 ? `
-                  <div class="flex flex-wrap gap-1 mt-2">
+                  <div class="flex flex-wrap gap-1.5 mt-2">
                     ${def.synonyms.slice(0, 3).map(s => `
-                      <span class="text-xs bg-surface-container-highest text-on-surface-variant px-2 py-0.5 rounded-full">${s}</span>
+                      <span class="text-label-sm bg-glass text-dark-text-muted px-2 py-0.5 rounded-lg">${s}</span>
                     `).join('')}
                   </div>
                 ` : ''}
@@ -74,16 +72,16 @@ export async function openDictionary(word) {
       `).join('');
     } else {
       definitionsEl.innerHTML = `
-        <div class="p-gap-md bg-surface-container rounded-lg text-center">
-          <p class="font-body-md text-on-surface-variant">No definitions found for this word.</p>
+        <div class="p-4 rounded-xl bg-glass text-center">
+          <p class="text-body-md text-dark-text-muted">No definitions found for this word.</p>
         </div>
       `;
     }
   } catch (error) {
     definitionsEl.innerHTML = `
-      <div class="p-gap-md bg-error-container/30 rounded-lg">
-        <p class="font-body-md text-error">${error.message}</p>
-        <p class="font-body-md text-on-surface-variant mt-2">The word may be misspelled or too obscure.</p>
+      <div class="p-4 rounded-xl bg-error-container border border-error/20">
+        <p class="text-body-md text-error">${error.message}</p>
+        <p class="text-body-sm text-dark-text-muted mt-2">The word may be misspelled or too obscure.</p>
       </div>
     `;
   }
@@ -108,7 +106,7 @@ export function closeDictionary() {
   }, 300);
 }
 
-// Set up close handlers immediately (module loads after DOM is ready with deferred scripts)
+// Set up close handlers
 const modalEl = document.getElementById('dictionary-modal');
 const closeBtnEl = document.getElementById('modal-close');
 
@@ -122,7 +120,6 @@ if (modalEl) {
   });
 }
 
-// Close on Escape key (always active)
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') closeDictionary();
 });
